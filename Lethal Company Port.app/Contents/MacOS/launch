@@ -1,0 +1,9 @@
+#!/bin/zsh
+# Opens a Terminal window running the kit's menu. Everything else (Python env, downloads, Unity build) is automatic.
+KIT="$(cd "$(dirname "$0")/../../.." && pwd)"
+if ! xcode-select -p >/dev/null 2>&1 && ! command -v python3 >/dev/null 2>&1; then
+  xcode-select --install 2>/dev/null
+  osascript -e 'display dialog "macOS needs to install its Command Line Tools (one time). Click Install in the window that just appeared, then open this launcher again." buttons {"OK"} default button "OK"' >/dev/null
+  exit 0
+fi
+osascript -e "tell application \"Terminal\" to do script \"cd '$KIT' && python3 -m lcport menu\"" -e 'tell application "Terminal" to activate' >/dev/null

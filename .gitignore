@@ -1,0 +1,7 @@
+work/
+*.pyc
+__pycache__/
+tools/*/bin/
+tools/*/obj/
+tools/*/out/
+.DS_Store
