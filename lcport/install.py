@@ -73,6 +73,7 @@ def write_modded_launcher(app):
     os.makedirs(macos, exist_ok=True); os.makedirs(res, exist_ok=True)
     path = os.path.join(macos, MODDED_EXE); tmp = path + ".tmp"
     shutil.copyfile(LAUNCHER_BIN, tmp); os.chmod(tmp, 0o755); os.replace(tmp, path)
+    with open(os.path.join(macos, "steam_appid.txt"), "w") as f: f.write(str(config.APPID))  # Steam registers the process as the game
     cfg = os.path.join(res, "launcher.json")
     with open(cfg + ".tmp", "w", encoding="utf-8") as f: json.dump(launcher_config(), f, indent=1, ensure_ascii=False)
     os.replace(cfg + ".tmp", cfg)
@@ -82,8 +83,9 @@ def modded_launcher_current(app):
     try:
         with open(os.path.join(app, "Contents", "MacOS", MODDED_EXE), "rb") as f: native = f.read(4) in MACHO_MAGIC
         with open(os.path.join(app, "Contents", "Resources", "launcher.json"), encoding="utf-8") as f: cfg = json.load(f)
+        with open(os.path.join(app, "Contents", "MacOS", "steam_appid.txt")) as f: appid = f.read().strip()
     except (OSError, ValueError): return False
-    return native and cfg == launcher_config()
+    return native and cfg == launcher_config() and appid == str(config.APPID)
 
 def fix_modded_launcher(app=None):
     """Bundles written by older versions start the game through a zsh script (which loses Steam's overlay), or carry

@@ -112,9 +112,10 @@ class ModdedLauncherTest(unittest.TestCase):
         args, env = self.check(self.run_launcher(DYLD_INSERT_LIBRARIES=self.dylib), "Café Run")
         self.assertEqual(env["DYLD_INSERT_LIBRARIES"], os.path.join(self.bepinex, "libdoorstop.dylib") + ":" + self.dylib)
 
-    def test_steam_ids_untouched(self):
-        args, env = self.check(self.run_launcher(SteamGameId="12345678901234567890", SteamAppId="0"), "Café Run")
-        self.assertEqual(env["SteamGameId"], "12345678901234567890"); self.assertEqual(env["SteamAppId"], "0")
+    def test_steam_app_id_overwritten_game_ids_kept(self):
+        # Steam sets all three to the shortcut's id; the API must still initialise as Lethal Company
+        args, env = self.check(self.run_launcher(SteamGameId="12345678901234567890", SteamAppId="2591565725"), "Café Run")
+        self.assertEqual(env["SteamGameId"], "12345678901234567890"); self.assertEqual(env["SteamAppId"], "1966720")
         self.assertEqual(env["SteamOverlayGameId"], "1966720")
 
     def test_overlay_added_when_not_started_by_steam(self):

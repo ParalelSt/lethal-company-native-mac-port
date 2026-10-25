@@ -160,7 +160,10 @@ int main(int argc, char **argv) {
     setenv("DOORSTOP_ENABLED", "1", 1);
     setenv("DOORSTOP_TARGET_ASSEMBLY", preloader, 1);
     setenv("DOORSTOP_IGNORE_DISABLED_ENV", "0", 1);
-    setenv("SteamAppId", APPID, 0); setenv("SteamGameId", APPID, 0); setenv("SteamOverlayGameId", APPID, 0);
+    /* Steam sets SteamAppId/SteamGameId/SteamOverlayGameId to the SHORTCUT's app id when it starts this bundle, but the
+     * game must initialise the Steam API as Lethal Company, so SteamAppId is always overwritten. SteamGameId and
+     * SteamOverlayGameId stay as Steam set them (overlay/playtime keep the shortcut) and are only filled in when absent. */
+    setenv("SteamAppId", APPID, 1); setenv("SteamGameId", APPID, 0); setenv("SteamOverlayGameId", APPID, 0);
     /* keep what Steam injected (its gameoverlayrenderer.dylib); started without it, add the overlay like steam.launch() */
     const char *dyld = getenv("DYLD_INSERT_LIBRARIES");
     const char *no_overlay = getenv("LC_NO_OVERLAY");

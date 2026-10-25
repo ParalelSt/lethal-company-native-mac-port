@@ -191,6 +191,7 @@ class SteamShortcutCommandTest(Sandbox):
         self.assertEqual(read(mexe, "rb"), read(install.LAUNCHER_BIN, "rb"))
         self.assertEqual(json.loads(read(os.path.join(self.modded, "Contents", "Resources", "launcher.json"))), install.launcher_config())
         self.assertEqual(install.launcher_config()["support"], config.SUPPORT); self.assertEqual(install.launcher_config()["app"], self.app)
+        self.assertEqual(read(os.path.join(self.modded, "Contents", "MacOS", "steam_appid.txt")), str(config.APPID))
         self.assertTrue(os.access(mexe, os.X_OK)); self.assertEqual(self.codesigned[0][:2], ["codesign", "--force"])
         # running it again replaces instead of duplicating, and leaves the updated launcher alone
         self.cli(); self.assertEqual(len(sc.load(self.vdf)), 3); self.assertEqual(len(self.codesigned), 1)
