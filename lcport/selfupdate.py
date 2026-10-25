@@ -3,10 +3,12 @@ import os, re, io, zipfile, shutil, tempfile
 from . import config
 from .util import http_json, download, log
 
-def latest():
+def latest(strict=False):
+    """The newest release, or None (offline, or no release yet). strict: let the network error through instead."""
     try:
         r = http_json(f"https://api.github.com/repos/{config.REPO}/releases/latest")
     except Exception:
+        if strict: raise
         return None
     tag = r.get("tag_name", "").lstrip("v"); asset = next((a for a in r.get("assets", []) if a["name"].endswith(".zip")), None)
     return {"version": tag, "notes": r.get("body", ""), "url": asset["browser_download_url"] if asset else None} if tag else None

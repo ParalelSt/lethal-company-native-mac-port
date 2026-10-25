@@ -1,16 +1,51 @@
-import os, sys, subprocess, hashlib, time, json, urllib.request, zipfile, tarfile, shutil
+import os, re, sys, subprocess, hashlib, time, json, urllib.request, zipfile, tarfile, shutil, contextlib
 from . import config
-
-class Step:
-    """Context manager that prints a step banner and timing."""
-    def __init__(self, name): self.name = name
-    def __enter__(self):
-        self.t = time.time(); log(f"==> {self.name}"); return self
-    def __exit__(self, *a):
-        log(f"    done in {time.time() - self.t:.0f}s")
 
 def log(msg):
     print(msg, flush=True)
+
+# Control lines for the native launcher. It reads them from stdout, drives its status label and progress bar with
+# them and leaves them out of the log: "##status <text>", "##progress <0-100>", "##done <text>", "##fail <text>".
+def status(text): log(f"##status {text}")
+def progress(pct): log(f"##progress {max(0, min(100, int(round(pct))))}")
+def done(text): log(f"##done {text}")
+def fail(text): log(f"##fail {text}")
+
+_scope = None  # active progress_steps scope: {"total": n, "index": i, "depth": nesting of open Steps}
+
+@contextlib.contextmanager
+def progress_steps(total):
+    """Number the top-level Steps inside the block: each prints "##status <title> (i/total)" and "##progress" lines.
+    Nested scopes (full_build inside cmd_build) join the outer one, whose total already counts their steps."""
+    global _scope
+    if _scope is not None: yield; return
+    _scope = {"total": max(1, total), "index": 0, "depth": 0}
+    try: yield
+    finally: _scope = None
+
+def human(name):
+    """Step title for people: no trailing "(...)" aside, first letter upper case."""
+    t = re.sub(r"\s*\([^()]*\)$", "", name).strip() or name
+    return t[:1].upper() + t[1:]
+
+class Step:
+    """Context manager that prints a step banner and timing, plus "##status" (and, inside progress_steps, "##progress")."""
+    def __init__(self, name, status=None): self.name = name; self.title = status or human(name); self.top = False
+    def __enter__(self):
+        self.t = time.time(); log(f"==> {self.name}")
+        sc = _scope
+        if sc is None: status(self.title); return self
+        self.top = sc["depth"] == 0; sc["depth"] += 1
+        if self.top: sc["index"] += 1
+        status(f"{self.title} ({min(sc['index'], sc['total'])}/{sc['total']})")
+        if self.top: progress((sc["index"] - 1) * 100 / sc["total"])
+        return self
+    def __exit__(self, *a):
+        log(f"    done in {time.time() - self.t:.0f}s")
+        sc = _scope
+        if sc is None: return
+        sc["depth"] = max(0, sc["depth"] - 1)
+        if self.top and a[0] is None: progress(sc["index"] * 100 / sc["total"])
 
 def run(cmd, cwd=None, env=None, check=True, capture=False, timeout=None):
     e = dict(os.environ); e.update(env or {})

@@ -15,6 +15,7 @@
 """
 import os, sys, json, time, io, zipfile, shutil, base64, urllib.request, re, tempfile
 from . import config, dotnetmeta, thirdparty
+from .util import status as say_status, progress as say_progress, done as say_done  # launcher control lines
 
 INDEX_URL = "https://thunderstore.io/c/lethal-company/api/v1/package/"
 UA = {"User-Agent": "lethal-company-mac-port/1.0"}
@@ -82,24 +83,27 @@ def extract_mod(zip_path, bep, full_name):
             os.makedirs(os.path.dirname(target), exist_ok=True)
             with z.open(info) as s, open(target, "wb") as d: shutil.copyfileobj(s, d)
 
-def install(profile, refs, pinned=None):
+def install(profile, refs, pinned=None, span=(0, 90)):
+    """span: the part of the launcher's progress bar (percent) this install fills, one share per package."""
     idx = by_name(index()); bep = profile_dir(profile); man = load_manifest(profile)
     queue = list(refs); done = set()
     while queue:
         ref = queue.pop(0); name, ver = split_ref(ref)
         if name in done: continue
+        left = len({split_ref(r)[0] for r in queue} - done - {name})  # dependencies found later grow the total
+        say_progress(span[0] + (span[1] - span[0]) * len(done) / (len(done) + left + 1))
         if name not in idx: raise SystemExit(f"unknown package {name}")
         if pinned and name in pinned: ver = pinned[name]
         v = pick_version(idx[name], ver); done.add(name); have = man.get(name)
         if have and vtuple(have) >= vtuple(v["version_number"]) and not (pinned and name in pinned):
             print(f"  {name} {have} already installed")
         else:
-            print(f"installing {name} {v['version_number']}", flush=True)
+            print(f"installing {name} {v['version_number']}", flush=True); say_status(f"installing {name.split('-', 1)[-1]} {v['version_number']}")
             extract_mod(download(v), bep, name); man[name] = v["version_number"]
         for dep in v["dependencies"]:
             dn, _ = split_ref(dep)
             if dn not in done: queue.append(dep if not pinned else dn)
-    save_manifest(profile, man); print(f"profile '{profile}': {len(man)} mods")
+    save_manifest(profile, man); print(f"profile '{profile}': {len(man)} mods"); say_progress(span[1])
 
 def remove(profile, name):
     bep = profile_dir(profile); man = load_manifest(profile)
@@ -113,7 +117,7 @@ def import_code(profile, code):
     r2x = z.read("export.r2x").decode()
     mods = re.findall(r"- name: (\S+)\n\s+version:\n\s+major: (\d+)\n\s+minor: (\d+)\n\s+patch: (\d+)\n\s+enabled: (\w+)", r2x)
     pinned = {n: f"{a}.{b}.{c}" for n, a, b, c, en in mods if en.lower() == "true"}
-    print(f"profile code lists {len(pinned)} enabled mods")
+    print(f"profile code lists {len(pinned)} enabled mods"); say_status(f"importing {len(pinned)} mods")
     install(profile, [f"{n}-{v}" for n, v in pinned.items()], pinned=pinned)
     bep = profile_dir(profile)
     for info in z.infolist():
@@ -151,6 +155,7 @@ def game_shaders():
     return set(json.load(open(p))) if os.path.exists(p) else set()
 
 def audit(profile, save=True):
+    say_status("checking the mods for Mac compatibility")
     bep = profile_dir(profile); man = load_manifest(profile)
     managed = os.path.join(config.APP_DST, "Contents", "Resources", "Data", "Managed")
     available = {f[:-4] for f in os.listdir(managed) if f.endswith(".dll")} if os.path.isdir(managed) else set()
@@ -275,11 +280,13 @@ def parse_apply(a):
 def apply(profile, installs, removes):
     total = len(installs) + len(removes)
     print(f"applying {total} change(s) to profile '{profile}': {len(installs)} to install, {len(removes)} to remove", flush=True)
+    cut = 90 * len(removes) / max(1, total)  # removes, then installs share the bar up to 90%; the audit fills the rest
     for i, name in enumerate(removes, 1):
+        say_status(f"removing {name.split('-', 1)[-1]}"); say_progress(cut * (i - 1) / len(removes))
         print(f"[{i}/{total}] removing {name}", flush=True); remove(profile, name)
     if installs:
-        print(f"[{len(removes) + 1}-{total}/{total}] installing {', '.join(installs)}", flush=True); install(profile, installs)
-    audit(profile, save=True)
+        print(f"[{len(removes) + 1}-{total}/{total}] installing {', '.join(installs)}", flush=True); install(profile, installs, span=(cut, 90))
+    say_progress(90); audit(profile, save=True)
 
 def main(a):
     if not a or a[0] in ("-h", "--help"): print(__doc__); return
@@ -301,14 +308,14 @@ def main(a):
         q = " ".join(a[1:]).lower()
         hits = sorted([p for p in index() if q in p["full_name"].lower() or q in p["versions"][0]["description"].lower()], key=lambda p: -p["rating_score"])
         for p in hits[:25]: print(f"  {p['full_name']:45s} {p['versions'][0]['version_number']:10s} {p['rating_score']:5d}  {p['versions'][0]['description'][:60]}")
-    elif cmd == "install": install(a[1], a[2:]); audit(a[1], save=True)
-    elif cmd == "remove": remove(a[1], a[2])
+    elif cmd == "install": install(a[1], a[2:]); audit(a[1], save=True); say_done("Mods installed")
+    elif cmd == "remove": say_status(f"removing {a[2].split('-', 1)[-1]}"); remove(a[1], a[2]); say_done(f"Removed {a[2].split('-', 1)[-1]}")
     elif cmd == "list":
         for n, v in sorted(load_manifest(a[1]).items()): print(f"  {n} {v}")
-    elif cmd == "update": install(a[1], list(load_manifest(a[1]).keys())); audit(a[1], save=True)
-    elif cmd == "import": import_code(a[1], a[2]); audit(a[1], save=True)
-    elif cmd == "apply": apply(*parse_apply(a[1:]))
-    elif cmd == "audit": audit(a[1])
+    elif cmd == "update": install(a[1], list(load_manifest(a[1]).keys())); audit(a[1], save=True); say_done("Mods up to date")
+    elif cmd == "import": import_code(a[1], a[2]); audit(a[1], save=True); say_done("Profile imported")
+    elif cmd == "apply": apply(*parse_apply(a[1:])); say_done("Changes applied")
+    elif cmd == "audit": audit(a[1]); say_done("Mod check finished")
     else: print(__doc__)
 
 if __name__ == "__main__": main(sys.argv[1:])

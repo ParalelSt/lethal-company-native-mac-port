@@ -8,9 +8,12 @@ Format: [Keep a Changelog](https://keepachangelog.com). Versions follow the laun
 ### Added
 - Add to Steam: registers the native and modded apps as Steam shortcuts so Play launches through Steam and the real Steam overlay works (`steam-shortcut`, launcher button).
 - `net-fix` / `net-verify`: restore and check the original network prefab hashes in the installed app.
+- Progress in the launcher: a plain-language status line and a progress bar for builds, mod installs and launches (the kit prints `##status` / `##progress` / `##done` / `##fail` lines).
+- README section on getting the Windows copy of the game (SteamCMD on the Mac, a Windows PC, or Steam in a wrapper).
 
 ### Changed
 - The modded app starts through a small native launcher instead of a shell script, so Steam's overlay reaches the game and the last chosen profile is used.
+- Home tab: a Vanilla / Mods switch with one Play button, a 2x2 status grid with short hints, and smaller, lighter buttons everywhere.
 
 ### Fixed
 - Joining Windows hosts: the native build carried regenerated NetworkObject hashes, so Netcode rejected the client without a reason. Builds now restore the original hashes after the Unity build.

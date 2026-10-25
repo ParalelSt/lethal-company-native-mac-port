@@ -43,7 +43,7 @@ def reset_window_state():
     shutil.rmtree(os.path.expanduser(f"~/Library/Saved Application State/{config.BUNDLE_ID}.savedState"), ignore_errors=True)
 
 def install_app(built_app, game_dir):
-    with Step(f"install {config.APP_DST}"):
+    with Step(f"install {config.APP_DST}", status="Installing the game in Applications"):
         if os.path.exists(config.APP_DST): shutil.rmtree(config.APP_DST)
         shutil.copytree(built_app, config.APP_DST, symlinks=True)
         png = os.path.join(config.WORK, "icon.png")
@@ -97,7 +97,7 @@ def fix_modded_launcher(app=None):
     return True
 
 def install_modded_launcher():
-    with Step(f"install {config.MODDED_DST}"):
+    with Step(f"install {config.MODDED_DST}", status="Installing the modded launcher"):
         a = config.MODDED_DST; shutil.rmtree(a, ignore_errors=True)
         os.makedirs(os.path.join(a, "Contents", "MacOS")); os.makedirs(os.path.join(a, "Contents", "Resources"))
         write_modded_launcher(a)

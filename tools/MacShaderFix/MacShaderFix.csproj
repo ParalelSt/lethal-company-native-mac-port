@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>netstandard2.1</TargetFramework><AssemblyName>MacShaderFix</AssemblyName><LangVersion>9</LangVersion><Nullable>disable</Nullable><DebugType>none</DebugType><Version>1.1.0</Version><GenerateAssemblyInfo>false</GenerateAssemblyInfo>
-<UnityManaged Condition="'$(UnityManaged)'==''">/Users/aronmatoic/Applications/Lethal Company.app/Contents/Resources/Data/Managed</UnityManaged>
-<BepInExCore Condition="'$(BepInExCore)'==''">/Users/aronmatoic/Documents/Main Projects/lethal-company-mac/natives/bepinex/BepInEx/core</BepInExCore></PropertyGroup>
+<!-- Set UnityManaged to <built app>/Contents/Resources/Data/Managed and BepInExCore to a BepInEx 5 core folder, e.g. dotnet build -p:UnityManaged=... -p:BepInExCore=... -->
+<UnityManaged Condition="'$(UnityManaged)'==''"></UnityManaged>
+<BepInExCore Condition="'$(BepInExCore)'==''"></BepInExCore></PropertyGroup>
 <ItemGroup>
 <Reference Include="BepInEx"><HintPath>$(BepInExCore)/BepInEx.dll</HintPath></Reference>
 <Reference Include="0Harmony"><HintPath>$(BepInExCore)/0Harmony.dll</HintPath></Reference>

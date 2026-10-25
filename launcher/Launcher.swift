@@ -5,6 +5,9 @@ import Foundation
 // collapsible log drawer. Every action runs the Python kit ("python3 -m lcport ...") in the kit folder next to this
 // app bundle; output streams into the drawer.
 
+/// Paragraph style for one-line labels set through attributedStringValue (which otherwise drops the label's truncation).
+let oneLine: NSParagraphStyle = { let p = NSMutableParagraphStyle(); p.lineBreakMode = .byTruncatingTail; return p }()
+
 // MARK: - theme
 enum T {
     static let canvas = NSColor(srgbRed: 0.082, green: 0.090, blue: 0.110, alpha: 1)
@@ -31,11 +34,13 @@ final class Card: NSView {
 final class FlatButton: NSButton {
     var fill: NSColor = T.accent { didSet { refresh() } }
     var textColor: NSColor = NSColor(srgbRed: 0.10, green: 0.05, blue: 0.02, alpha: 1) { didSet { refresh() } }
-    var padding: CGFloat = 12
-    convenience init(_ title: String, fill: NSColor, text: NSColor, bold: Bool = true, target: AnyObject?, action: Selector) {
+    var padding: CGFloat = 10
+    var heightConstraint: NSLayoutConstraint!
+    /// 26pt pill, 12pt medium; `bold` (primary actions) uses semibold. Callers may raise the height and font (the hero Play does).
+    convenience init(_ title: String, fill: NSColor, text: NSColor, bold: Bool = false, target: AnyObject?, action: Selector) {
         self.init(frame: .zero); self.title = title; self.fill = fill; self.textColor = text; self.target = target; self.action = action
-        isBordered = false; wantsLayer = true; layer?.cornerRadius = 7; font = .systemFont(ofSize: 12.5, weight: bold ? .semibold : .regular)
-        translatesAutoresizingMaskIntoConstraints = false; heightAnchor.constraint(equalToConstant: 30).isActive = true
+        isBordered = false; wantsLayer = true; layer?.cornerRadius = 7; font = .systemFont(ofSize: 12, weight: bold ? .semibold : .medium)
+        translatesAutoresizingMaskIntoConstraints = false; heightConstraint = heightAnchor.constraint(equalToConstant: 26); heightConstraint.isActive = true
         setContentCompressionResistancePriority(.required, for: .horizontal); setContentHuggingPriority(.defaultHigh, for: .horizontal); refresh()
     }
     func refresh() {
@@ -58,6 +63,39 @@ final class NavRow: NSView {
     }
     @objc func click() { onClick?() }
     required init?(coder: NSCoder) { fatalError() }
+}
+
+/// Two-option switch (Vanilla | Mods) in the theme's colours: a bordered capsule whose selected half is filled with T.card2.
+final class SegSwitch: NSView {
+    private var items: [NSButton] = []
+    var selected = 0 { didSet { refresh() } }
+    var onChange: ((Int) -> Void)?
+    init(_ titles: [String]) {
+        super.init(frame: .zero); wantsLayer = true; translatesAutoresizingMaskIntoConstraints = false
+        layer?.cornerRadius = 7; layer?.borderWidth = 1; layer?.masksToBounds = true
+        layer?.borderColor = NSColor(srgbRed: 0.227, green: 0.255, blue: 0.306, alpha: 1).cgColor; layer?.backgroundColor = NSColor(white: 0, alpha: 0.2).cgColor
+        let bold = NSFont.systemFont(ofSize: 12, weight: .semibold)
+        let w = ceil(titles.map { ($0 as NSString).size(withAttributes: [.font: bold]).width }.max() ?? 40) + 28  // equal halves
+        var x: NSLayoutXAxisAnchor = leadingAnchor
+        for (i, t) in titles.enumerated() {
+            let b = NSButton(title: t, target: self, action: #selector(click(_:))); b.tag = i; b.isBordered = false; b.wantsLayer = true; b.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(b); items.append(b)
+            NSLayoutConstraint.activate([b.leadingAnchor.constraint(equalTo: x), b.topAnchor.constraint(equalTo: topAnchor), b.bottomAnchor.constraint(equalTo: bottomAnchor), b.widthAnchor.constraint(equalToConstant: w)])
+            x = b.trailingAnchor
+        }
+        NSLayoutConstraint.activate([x.constraint(equalTo: trailingAnchor), heightAnchor.constraint(equalToConstant: 28)])
+        refresh()
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    @objc func click(_ b: NSButton) { if b.tag != selected { selected = b.tag; onChange?(selected) } }
+    func refresh() {
+        let p = NSMutableParagraphStyle(); p.alignment = .center
+        for b in items {
+            let on = b.tag == selected
+            b.layer?.backgroundColor = (on ? T.card2 : NSColor.clear).cgColor
+            b.attributedTitle = NSAttributedString(string: b.title, attributes: [.foregroundColor: on ? T.text : T.muted, .font: NSFont.systemFont(ofSize: 12, weight: on ? .semibold : .medium), .paragraphStyle: p])
+        }
+    }
 }
 
 // MARK: - mods page pieces
@@ -202,7 +240,8 @@ final class Launcher: NSObject, NSApplicationDelegate, NSCollectionViewDataSourc
     let support = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/LethalCompanyMac")
     var window: NSWindow!
     var pages: [String: NSView] = [:], navRows: [String: NavRow] = [:], current = "home"
-    var heroSub = NSTextField(labelWithString: ""), statusRows: [String: (NSTextField, NSTextField)] = [:]
+    var heroSub = NSTextField(labelWithString: ""), statusRows: [String: (NSTextField, NSTextField)] = [:], statusCells: [String: NSView] = [:]
+    var modeSwitch: SegSwitch!, playButton: FlatButton!, launcherUpdate: Bool?, launcherChecked = false, launcherNoRelease = false
     var profilesHome = NSPopUpButton(), profiles = NSPopUpButton(), search = NSSearchField()  // `profiles` is hidden: the Mods page's chips select into it
     var profileRow = ChipRow(height: 26, spacing: 8), chipRow = ChipRow(height: 24), modCount = NSTextField(labelWithString: ""), profileSig = ""
     var grid: NSCollectionView!, gridScroll: NSScrollView!, gridToEdge: NSLayoutConstraint!, gridToPanel: NSLayoutConstraint!, bodyToPage: NSLayoutConstraint!, bodyToBar: NSLayoutConstraint!
@@ -212,6 +251,10 @@ final class Launcher: NSObject, NSApplicationDelegate, NSCollectionViewDataSourc
     lazy var pName = label("", size: 16, color: T.text, weight: .bold); lazy var pOwner = label("", size: 12, color: T.muted, wrap: false); lazy var pStats = label("", size: 12, color: T.muted)
     lazy var pDesc = label("", size: 12.5); lazy var pVerdict = label("", size: 12.5, weight: .semibold); lazy var pNotes = label("", size: 11.5); lazy var pDeps = label("", size: 12, color: T.text)
     var log: NSTextView!, logScroll: NSScrollView!, logHeight: NSLayoutConstraint!, drawerLine = NSTextField(labelWithString: "Ready"), drawerArrow = NSTextField(labelWithString: "▸"), spinner: NSProgressIndicator!, drawerOpen = false
+    // human task status (driven by the kit's "##status / ##progress / ##done / ##fail" lines, which stay out of the log)
+    enum TaskState { case idle, busy, done, fail }
+    var taskLabel = NSTextField(labelWithString: ""), taskBar: NSProgressIndicator!, taskState = TaskState.idle, taskText = "Ready", taskPct: Double?
+    var barVisible = false, barGen = 0, rawOut = Data(), outBuf = "", midLine = false
     var activityLog: NSTextView!
     var buttons: [NSButton] = []
     var process: Process?
@@ -227,6 +270,21 @@ final class Launcher: NSObject, NSApplicationDelegate, NSCollectionViewDataSourc
         Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.refreshStatus() }
         NSApp.activate(ignoringOtherApps: true)
         reloadInstalled { self.doSearch() }
+        kitJSON(["self-update", "--json"]) { obj in  // "up to date" / "update available" in the status grid
+            self.launcherChecked = true
+            if let d = obj as? [String: Any] {
+                if d["latest"] as? String != nil { self.launcherUpdate = d["available"] as? Bool ?? false }
+                self.launcherNoRelease = d["state"] as? String == "none"
+            }
+            self.refreshStatus()
+        }
+        if ProcessInfo.processInfo.environment["LC_SNAPSHOT_BUSY"] == "1" {  // review the progress UI: a fake build at step 4 of 9
+            DispatchQueue.main.asyncAfter(deadline: .now() + 6.5) {
+                self.beginTask(["build"]); self.setBusy(true)
+                self.consume("==> Unity: build the macOS app (compiles every shader for Metal; 30-60 min)\n##status compiling shaders (4/9)\n##progress 44\n")
+                self.setDrawer(true)
+            }
+        }
         if let path = ProcessInfo.processInfo.environment["LC_SNAPSHOT"] {
             if let tab = ProcessInfo.processInfo.environment["LC_SNAPSHOT_TAB"] { show(tab) }
             DispatchQueue.main.asyncAfter(deadline: .now() + 9) { self.snapshot(to: path); NSApp.terminate(nil) }
@@ -249,7 +307,7 @@ final class Launcher: NSObject, NSApplicationDelegate, NSCollectionViewDataSourc
         return l
     }
     func flat(_ title: String, _ sel: Selector, primary: Bool = false) -> FlatButton {
-        let b = FlatButton(title, fill: primary ? T.accent : T.card2, text: primary ? NSColor(srgbRed: 0.10, green: 0.05, blue: 0.02, alpha: 1) : T.text, target: self, action: sel); buttons.append(b); return b
+        let b = FlatButton(title, fill: primary ? T.accent : T.card2, text: primary ? NSColor(srgbRed: 0.10, green: 0.05, blue: 0.02, alpha: 1) : T.text, bold: primary, target: self, action: sel); buttons.append(b); return b
     }
     func vstack(_ views: [NSView], spacing: CGFloat = 8, insets: NSEdgeInsets = NSEdgeInsets()) -> NSStackView {
         let s = NSStackView(views: views); s.orientation = .vertical; s.alignment = .leading; s.spacing = spacing; s.edgeInsets = insets; s.translatesAutoresizingMaskIntoConstraints = false; return s
@@ -312,19 +370,30 @@ final class Launcher: NSObject, NSApplicationDelegate, NSCollectionViewDataSourc
         NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification, object: hero, queue: .main) { _ in g.frame = hero.bounds }
         let title = label("LETHAL COMPANY", size: 30, color: .white, weight: .black, wrap: false)
         heroSub = label("", size: 13, color: NSColor(white: 1, alpha: 0.75), wrap: false)
-        let play = flat("▶  Play", #selector(play), primary: true); play.padding = 26
-        let playMods = flat("Play with mods", #selector(playModded)); styledPopup(profilesHome); profilesHome.target = self; profilesHome.action = #selector(profileChangedHome)
-        let heroBtns = hstack([play, playMods, profilesHome], spacing: 10)
-        let heroStack = vstack([title, heroSub, heroBtns], spacing: 10, insets: NSEdgeInsets(top: 54, left: 32, bottom: 26, right: 32))
-        heroStack.setCustomSpacing(18, after: heroSub); fill(heroStack, in: hero)
+        // Vanilla | Mods switch (+ the profile popup in Mods mode), then one wide Play that follows the switch
+        modeSwitch = SegSwitch(["Vanilla", "Mods"]); modeSwitch.onChange = { [weak self] i in self?.setMode(i == 1 ? "mods" : "vanilla") }
+        styledPopup(profilesHome); profilesHome.target = self; profilesHome.action = #selector(profileChangedHome)
+        let modeRow = hstack([modeSwitch, profilesHome], spacing: 10)
+        playButton = flat("▶  Play", #selector(playSelected), primary: true); playButton.heightConstraint.constant = 38
+        playButton.font = .systemFont(ofSize: 14, weight: .bold); playButton.layer?.cornerRadius = 8; playButton.refresh()
+        playButton.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let heroStack = vstack([title, heroSub, modeRow, playButton], spacing: 10, insets: NSEdgeInsets(top: 54, left: 32, bottom: 26, right: 32))
+        heroStack.setCustomSpacing(6, after: title); heroStack.setCustomSpacing(16, after: heroSub); heroStack.setCustomSpacing(12, after: modeRow); fill(heroStack, in: hero)
+        playButton.widthAnchor.constraint(equalTo: heroStack.widthAnchor, constant: -64).isActive = true
+        setMode(UserDefaults.standard.string(forKey: "lc.mode") == "mods" ? "mods" : "vanilla")
         // status card
-        let status = Card(); var rows: [NSView] = [label("STATUS", size: 11, color: T.muted, weight: .semibold, wrap: false)]
+        // status card: 2x2 grid, each cell a caption, a bold value and one short hint (the long hint is the tooltip)
+        let status = Card(); var cells: [NSView] = []
         for (key, name) in [("game", "Game"), ("steam", "Steam"), ("unity", "Unity"), ("launcher", "Launcher")] {
-            let k = label(name, size: 13, color: T.text, weight: .medium, wrap: false); k.widthAnchor.constraint(equalToConstant: 80).isActive = true
-            let v = label("", size: 13, color: T.text, wrap: false); let hint = label("", size: 12, color: T.muted, wrap: false); hint.setContentHuggingPriority(.defaultLow, for: .horizontal)
-            statusRows[key] = (v, hint); rows.append(hstack([k, v, hint], spacing: 12))
+            let cap = label(name.uppercased(), size: 10.5, color: T.muted, weight: .semibold, wrap: false)
+            let v = label("", size: 13, color: T.text, weight: .bold, wrap: false); v.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
+            let hint = label("", size: 12, color: T.muted, wrap: false); hint.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            let cell = vstack([cap, hstack([v, hint], spacing: 6)], spacing: 3)
+            statusRows[key] = (v, hint); statusCells[key] = cell; cells.append(cell)
         }
-        let statusStack = vstack(rows, spacing: 9, insets: NSEdgeInsets(top: 14, left: 16, bottom: 14, right: 16)); fill(statusStack, in: status)
+        let gridRows = [hstack([cells[0], cells[1]], spacing: 16), hstack([cells[2], cells[3]], spacing: 16)]
+        let statusStack = vstack(gridRows, spacing: 12, insets: NSEdgeInsets(top: 14, left: 16, bottom: 14, right: 16)); fill(statusStack, in: status)
+        for r in gridRows { r.distribution = .fillEqually; r.alignment = .top; r.widthAnchor.constraint(equalTo: statusStack.widthAnchor, constant: -32).isActive = true }
         // action cards
         let buildCard = Card(); fill(vstack([label("BUILD / UPDATE GAME", size: 11, color: T.muted, weight: .semibold, wrap: false),
             label("Pick your \"Lethal Company\" folder from a Windows Steam install (Steam › Manage › Browse local files). The launcher checks Steam ownership, extracts the game, swaps the Windows-only parts, compiles the shaders for Metal and installs the app. About an hour the first time, much less afterwards. Run it again when the game updates.", size: 12.5),
@@ -441,22 +510,105 @@ final class Launcher: NSObject, NSApplicationDelegate, NSCollectionViewDataSourc
         let d = NSView(); d.wantsLayer = true; d.layer?.backgroundColor = T.side.cgColor; d.translatesAutoresizingMaskIntoConstraints = false
         let top = NSView(); top.wantsLayer = true; top.layer?.backgroundColor = T.line.cgColor; top.translatesAutoresizingMaskIntoConstraints = false; d.addSubview(top)
         spinner = NSProgressIndicator(); spinner.style = .spinning; spinner.controlSize = .small; spinner.isDisplayedWhenStopped = false; spinner.translatesAutoresizingMaskIntoConstraints = false
-        drawerArrow.font = .systemFont(ofSize: 12); drawerArrow.textColor = T.muted; drawerLine.font = NSFont.monospacedSystemFont(ofSize: 11.5, weight: .regular); drawerLine.textColor = T.muted; drawerLine.lineBreakMode = .byTruncatingTail
+        drawerArrow.font = .systemFont(ofSize: 12); drawerArrow.textColor = T.muted; drawerLine.font = .systemFont(ofSize: 12, weight: .medium); drawerLine.textColor = T.muted; drawerLine.lineBreakMode = .byTruncatingTail
+        drawerLine.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let bar = hstack([drawerArrow, drawerLine, NSView(), spinner], spacing: 8); bar.edgeInsets = NSEdgeInsets(top: 0, left: 16, bottom: 0, right: 16)
         bar.heightAnchor.constraint(equalToConstant: 30).isActive = true; bar.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(toggleDrawer)))
+        // expanded part: the human status line and progress bar, then the raw log
+        taskLabel = label("Ready", size: 13, color: T.text, wrap: false)
+        taskBar = NSProgressIndicator(); taskBar.style = .bar; taskBar.controlSize = .small; taskBar.minValue = 0; taskBar.maxValue = 100; taskBar.isIndeterminate = true; taskBar.translatesAutoresizingMaskIntoConstraints = false; taskBar.isHidden = true
+        let statusBox = vstack([taskLabel, taskBar], spacing: 7, insets: NSEdgeInsets(top: 4, left: 16, bottom: 10, right: 16))
+        taskLabel.widthAnchor.constraint(equalTo: statusBox.widthAnchor, constant: -32).isActive = true; taskBar.widthAnchor.constraint(equalTo: statusBox.widthAnchor, constant: -32).isActive = true
         log = NSTextView(); log.isEditable = false; log.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular); log.backgroundColor = T.canvas; log.textColor = T.text
         log.isVerticallyResizable = true; log.isHorizontallyResizable = false; log.autoresizingMask = [.width]; log.textContainer?.widthTracksTextView = true; log.textContainerInset = NSSize(width: 10, height: 6)
         logScroll = NSScrollView(); logScroll.documentView = log; logScroll.hasVerticalScroller = true; logScroll.drawsBackground = false; logScroll.translatesAutoresizingMaskIntoConstraints = false
-        logHeight = logScroll.heightAnchor.constraint(equalToConstant: 0); logHeight.isActive = true
-        let stack = vstack([bar, logScroll], spacing: 0); fill(stack, in: d)
-        bar.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true; logScroll.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        let details = NSView(); details.wantsLayer = true; details.layer?.masksToBounds = true; details.translatesAutoresizingMaskIntoConstraints = false
+        let inner = vstack([statusBox, logScroll], spacing: 0); details.addSubview(inner)
+        statusBox.widthAnchor.constraint(equalTo: inner.widthAnchor).isActive = true; logScroll.widthAnchor.constraint(equalTo: inner.widthAnchor).isActive = true
+        let fillBottom = inner.bottomAnchor.constraint(equalTo: details.bottomAnchor); fillBottom.priority = .defaultHigh  // gives way while collapsed
+        let logFallback = logScroll.heightAnchor.constraint(equalToConstant: 190); logFallback.priority = .defaultLow
+        NSLayoutConstraint.activate([inner.leadingAnchor.constraint(equalTo: details.leadingAnchor), inner.trailingAnchor.constraint(equalTo: details.trailingAnchor), inner.topAnchor.constraint(equalTo: details.topAnchor), fillBottom, logFallback])
+        logHeight = details.heightAnchor.constraint(equalToConstant: 0); logHeight.isActive = true
+        let stack = vstack([bar, details], spacing: 0); fill(stack, in: d)
+        bar.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true; details.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         NSLayoutConstraint.activate([top.leadingAnchor.constraint(equalTo: d.leadingAnchor), top.trailingAnchor.constraint(equalTo: d.trailingAnchor), top.topAnchor.constraint(equalTo: d.topAnchor), top.heightAnchor.constraint(equalToConstant: 1)])
+        renderTask()
         return d
     }
     @objc func toggleDrawer() { setDrawer(!drawerOpen) }
     func setDrawer(_ open: Bool) {
-        drawerOpen = open; drawerArrow.stringValue = open ? "▾" : "▸"
-        NSAnimationContext.runAnimationGroup { ctx in ctx.duration = 0.18; logHeight.animator().constant = open ? 220 : 0 }
+        drawerOpen = open; drawerArrow.stringValue = open ? "▾" : "▸"; renderTask()
+        NSAnimationContext.runAnimationGroup { ctx in ctx.duration = 0.18; logHeight.animator().constant = open ? 250 : 0 }
+    }
+
+    // MARK: task status (kit control lines)
+    /// "✓ text" in green for done, the whole text in T.bad for a failure, muted when idle.
+    func taskString(_ size: CGFloat) -> NSAttributedString {
+        let f = NSFont.systemFont(ofSize: size, weight: .medium), s = NSMutableAttributedString()
+        switch taskState {
+        case .done: s.append(NSAttributedString(string: "✓  ", attributes: [.font: NSFont.systemFont(ofSize: size, weight: .bold), .foregroundColor: T.ok])); s.append(NSAttributedString(string: taskText, attributes: [.font: f, .foregroundColor: T.text]))
+        case .fail: s.append(NSAttributedString(string: taskText, attributes: [.font: f, .foregroundColor: T.bad]))
+        case .busy: s.append(NSAttributedString(string: taskText, attributes: [.font: f, .foregroundColor: T.text]))
+        case .idle: s.append(NSAttributedString(string: taskText, attributes: [.font: f, .foregroundColor: T.muted]))
+        }
+        s.addAttribute(.paragraphStyle, value: oneLine, range: NSRange(location: 0, length: s.length)); return s
+    }
+    func renderTask() {
+        let big = taskString(13); taskLabel.attributedStringValue = big
+        if drawerOpen { drawerLine.attributedStringValue = NSAttributedString(string: "Hide log", attributes: [.font: NSFont.systemFont(ofSize: 12, weight: .medium), .foregroundColor: T.muted, .paragraphStyle: oneLine]) }
+        else {  // collapsed: the same human status, plus the percentage while it runs
+            let line = NSMutableAttributedString(attributedString: taskString(12))
+            if taskState == .busy, let p = taskPct { line.append(NSAttributedString(string: "  ·  \(Int(p))%", attributes: [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: T.muted, .paragraphStyle: oneLine])) }
+            drawerLine.attributedStringValue = line
+        }
+        taskBar.isHidden = !barVisible || taskState == .fail
+        if let p = taskPct { taskBar.isIndeterminate = false; taskBar.stopAnimation(nil); taskBar.doubleValue = p }
+        else { taskBar.isIndeterminate = true; if barVisible { taskBar.startAnimation(nil) } else { taskBar.stopAnimation(nil) } }
+    }
+    /// A task starts: a first human line until the kit reports its own, and an indeterminate bar.
+    func beginTask(_ args: [String]) {
+        let first: [String: String] = ["play": "Launching...", "play-modded": "Launching with mods...", "build": "Starting the build...", "mods": "Working on your mods...",
+                                       "check-update": "Checking for a game update...", "self-update": "Checking for a launcher update...", "steam-shortcut": "Adding to Steam..."]
+        taskState = .busy; taskText = first[args.first ?? ""] ?? "Working..."; taskPct = nil; barVisible = true; barGen += 1
+        rawOut.removeAll(); outBuf = ""; midLine = false; renderTask()
+    }
+    /// The task ended: fill in a result line if the kit printed none, then hide the bar shortly after.
+    func endTask(_ code: Int32) {
+        if !outBuf.isEmpty { let rest = outBuf; outBuf = ""; line(rest) }
+        if code != 0 && taskState != .fail { _ = control("##fail Something went wrong, see Activity") }
+        else if code == 0 && taskState == .busy { _ = control("##done Done") }
+        barGen += 1; let gen = barGen
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { if gen == self.barGen { self.barVisible = false; self.renderTask() } }
+    }
+    /// Raw process output: buffered until it decodes as UTF-8, then split into lines.
+    func feed(_ d: Data) {
+        rawOut.append(d)
+        if let s = String(data: rawOut, encoding: .utf8) { rawOut.removeAll(); consume(s) }
+        else if rawOut.count > 8192 { let s = String(decoding: rawOut, as: UTF8.self); rawOut.removeAll(); consume(s) }
+    }
+    /// Complete lines go through `line`; a trailing partial line is shown at once unless it could be the start of a control line.
+    func consume(_ s: String) {
+        outBuf += s
+        while let r = outBuf.range(of: "\n") { let l = String(outBuf[..<r.lowerBound]); outBuf.removeSubrange(..<r.upperBound); line(l) }
+        if !outBuf.isEmpty && (midLine || !(outBuf.hasPrefix("##") || outBuf == "#")) { appendLog(outBuf); outBuf = ""; midLine = true }
+    }
+    func line(_ l: String) {
+        if midLine { midLine = false; appendLog(l + "\n"); return }
+        if l.hasPrefix("##") && control(l) { return }
+        appendLog(l + "\n")
+    }
+    /// "##status <text>", "##progress <0-100>", "##done <text>", "##fail <text>". Returns false for anything else (it is logged).
+    func control(_ l: String) -> Bool {
+        let body = l.dropFirst(2), sp = body.firstIndex(of: " ") ?? body.endIndex
+        let kind = String(body[..<sp]), text = String(body[sp...]).trimmingCharacters(in: .whitespaces)
+        switch kind {
+        case "status": taskState = .busy; taskText = text
+        case "progress": guard let v = Double(text) else { return false }; taskPct = min(100, max(0, v))
+        case "done": taskState = .done; taskText = text.isEmpty ? "Done" : text; taskPct = 100
+        case "fail": taskState = .fail; taskText = text.isEmpty ? "Something went wrong, see Activity" : text
+        default: return false
+        }
+        renderTask(); return true
     }
 
     func show(_ id: String) {
@@ -468,21 +620,28 @@ final class Launcher: NSObject, NSApplicationDelegate, NSCollectionViewDataSourc
     // MARK: status
     func refreshStatus() {
         let app = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications/Lethal Company.app")
-        var gameV = "not built", gameH = "Use Build / Update game below.", gameC = T.warn
+        var gameV = "not built", gameH = "Use Build / Update game below.", gameS = "use Build / Update", gameC = T.warn
         if let data = try? Data(contentsOf: support.appendingPathComponent("state.json")), let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any], FileManager.default.fileExists(atPath: app.path) {
-            gameV = "ready"; gameH = "built \(j["built"] as? String ?? "?") · Unity \(j["unity"] as? String ?? "?") · in ~/Applications"; gameC = T.ok
-        } else if FileManager.default.fileExists(atPath: app.path) { gameV = "installed"; gameH = "~/Applications/Lethal Company.app"; gameC = T.ok }
-        set("game", gameV, gameH, gameC)
+            let built = j["built"] as? String ?? "?"
+            gameV = "ready"; gameH = "built \(built) · Unity \(j["unity"] as? String ?? "?") · in ~/Applications"; gameS = builtAgo(built); gameC = T.ok
+        } else if FileManager.default.fileExists(atPath: app.path) { gameV = "installed"; gameH = "~/Applications/Lethal Company.app"; gameS = "in ~/Applications"; gameC = T.ok }
+        set("game", gameV, gameH, gameC, short: gameS)
         var shortcut = false
         if let data = try? Data(contentsOf: support.appendingPathComponent("state.json")), let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let sc = j["steam_shortcuts"] as? [String: Any], !sc.isEmpty { shortcut = true }
-        let steam = isRunning("steam_osx"); set("steam", steam ? "running" : "not running", (shortcut ? "added as shortcut" : "not added") + " · " + (steam ? "signed-in account must own the game" : "started automatically when you play or build"), steam ? T.ok : T.warn)
-        let editors = ((try? FileManager.default.contentsOfDirectory(atPath: "/Applications/Unity/Hub/Editor")) ?? []).filter { $0.hasPrefix("2022.3") }
-        if !editors.isEmpty { set("unity", "ready", "editor \(editors.joined(separator: ", "))", T.ok) }
-        else if FileManager.default.fileExists(atPath: "/Applications/Unity Hub.app") { set("unity", "hub only", "the editor is downloaded during the first build", T.warn) }
-        else { set("unity", "missing", "install Unity Hub from unity.com and sign in once", T.bad) }
-        set("launcher", "version \(version())", "", T.text)
+        let steam = isRunning("steam_osx"); set("steam", steam ? "running" : "not running", (shortcut ? "added as shortcut" : "not added") + " · " + (steam ? "signed-in account must own the game" : "started automatically when you play or build"), steam ? T.ok : T.warn,
+                                              short: steam ? (shortcut ? "shortcut added" : "no shortcut yet") : "opens when you play")
+        let editors = ((try? FileManager.default.contentsOfDirectory(atPath: "/Applications/Unity/Hub/Editor")) ?? []).filter { $0.hasPrefix("2022.3") }.sorted()
+        if !editors.isEmpty { set("unity", "ready", "editor \(editors.joined(separator: ", "))", T.ok, short: editors.last! + (editors.count > 1 ? " +\(editors.count - 1)" : "")) }
+        else if FileManager.default.fileExists(atPath: "/Applications/Unity Hub.app") { set("unity", "hub only", "the editor is downloaded during the first build", T.warn, short: "editor comes with build") }
+        else { set("unity", "missing", "install Unity Hub from unity.com and sign in once", T.bad, short: "install Unity Hub") }
+        let upd = !launcherChecked ? ("checking…", "Checking GitHub for a newer launcher release")
+            : launcherUpdate == nil ? (launcherNoRelease ? ("no release published", "No launcher release is published on GitHub yet") : ("update check failed", "Could not reach GitHub to check for a newer launcher"))
+            : launcherUpdate! ? ("update available", "A newer launcher is out: use Check for launcher update") : ("up to date", "This is the newest launcher release")
+        set("launcher", version(), upd.1, T.text, short: upd.0)
         (window.contentView?.subviews.first?.subviews.compactMap { $0 as? NSStackView }.last?.arrangedSubviews.first as? NSTextField)?.stringValue = "Launcher \(version())"
-        heroSub.stringValue = gameV == "ready" ? "Native build ready · \(steam ? "Steam running" : "Steam not running") · keep Steam open while you play" : "Not built yet. Use Build / Update game below."
+        let ready = gameV == "ready", sub = NSMutableAttributedString(string: "●  ", attributes: [.foregroundColor: ready ? T.ok : T.warn, .font: NSFont.systemFont(ofSize: 10)])
+        sub.append(NSAttributedString(string: ready ? "Native build ready · \(steam ? "Steam running" : "Steam not running")" : "Not built yet", attributes: [.foregroundColor: NSColor(white: 1, alpha: 0.75), .font: NSFont.systemFont(ofSize: 13)]))
+        sub.addAttribute(.paragraphStyle, value: oneLine, range: NSRange(location: 0, length: sub.length)); heroSub.attributedStringValue = sub
         let names = ((try? FileManager.default.contentsOfDirectory(atPath: support.appendingPathComponent("profiles").path)) ?? []).filter { !$0.hasPrefix(".") && !$0.hasSuffix(".txt") }.sorted()
         let current = profiles.titleOfSelectedItem
         for pop in [profiles, profilesHome] where Set(names.isEmpty ? ["Default"] : names) != Set(pop.itemTitles) {
@@ -494,7 +653,21 @@ final class Launcher: NSObject, NSApplicationDelegate, NSCollectionViewDataSourc
         }
         syncProfileChips()
     }
-    func set(_ key: String, _ value: String, _ hint: String, _ color: NSColor) { guard let r = statusRows[key] else { return }; r.0.stringValue = value; r.0.textColor = color; r.1.stringValue = hint }
+    /// One status cell: bold value in `color`, then `short` (or the hint itself) as the one-line hint; the full hint is the tooltip.
+    func set(_ key: String, _ value: String, _ hint: String, _ color: NSColor, short: String? = nil) {
+        guard let r = statusRows[key] else { return }; r.0.stringValue = value; r.0.textColor = color
+        let h = short ?? hint; r.1.stringValue = h.isEmpty ? "" : "· " + h
+        for v in [statusCells[key], r.0, r.1].compactMap({ $0 }) { v.toolTip = hint.isEmpty ? nil : hint }
+    }
+    /// "2026-10-25 09:50" -> "built today" / "built yesterday" / "built Oct 25".
+    func builtAgo(_ s: String) -> String {
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd HH:mm"
+        guard let d = f.date(from: s) else { return "built" }
+        if Calendar.current.isDateInToday(d) { return "built today" }
+        if Calendar.current.isDateInYesterday(d) { return "built yesterday" }
+        let o = DateFormatter(); o.locale = Locale(identifier: "en_US"); o.dateFormat = Calendar.current.isDate(d, equalTo: Date(), toGranularity: .year) ? "MMM d" : "MMM d, yyyy"
+        return "built " + o.string(from: d)
+    }
     func version() -> String {
         if let s = try? String(contentsOf: kit.appendingPathComponent("lcport/__init__.py")), let r = s.range(of: "__version__ = \"") { return String(s[r.upperBound...].prefix(while: { $0 != "\"" })) }
         return "?"
@@ -514,17 +687,19 @@ final class Launcher: NSObject, NSApplicationDelegate, NSCollectionViewDataSourc
         let p = makeProcess(args); let pipe = Pipe(); p.standardOutput = pipe; p.standardError = pipe
         pipe.fileHandleForReading.readabilityHandler = { h in
             let d = h.availableData; if d.isEmpty { return }
-            if let s = String(data: d, encoding: .utf8) { DispatchQueue.main.async { self.appendLog(s) } }
+            DispatchQueue.main.async { self.feed(d) }  // control lines drive the status; everything else goes to the log
         }
         p.terminationHandler = { pr in
             DispatchQueue.main.async {
                 pipe.fileHandleForReading.readabilityHandler = nil
+                self.endTask(pr.terminationStatus)
                 self.appendLog(pr.terminationStatus == 0 ? "\n" : "\n(exited with code \(pr.terminationStatus))\n")
                 self.process = nil; self.setBusy(false); self.refreshStatus(); then?()
             }
         }
-        appendLog("\n$ lcport " + args.joined(separator: " ") + "\n")
-        do { try p.run(); process = p; setBusy(true); if !drawerOpen && current != "activity" { setDrawer(true) } } catch { appendLog("could not start: \(error)\n") }
+        appendLog("\n$ lcport " + args.joined(separator: " ") + "\n"); beginTask(args)
+        do { try p.run(); process = p; setBusy(true); if !drawerOpen && current != "activity" { setDrawer(true) } }
+        catch { appendLog("could not start: \(error)\n"); _ = control("##fail Could not start the task, see Activity"); barVisible = false; renderTask() }
     }
     func kitJSON(_ args: [String], _ completion: @escaping (Any?) -> Void) {
         DispatchQueue.global().async {
@@ -534,18 +709,24 @@ final class Launcher: NSObject, NSApplicationDelegate, NSCollectionViewDataSourc
             let obj = try? JSONSerialization.jsonObject(with: data); DispatchQueue.main.async { completion(obj) }
         }
     }
-    func setBusy(_ b: Bool) { b ? spinner.startAnimation(nil) : spinner.stopAnimation(nil); for x in buttons where x.title != "Clear" && x.title != "Quit" { x.isEnabled = !b }; if !b { drawerLine.stringValue = "Done" }; refreshTiles() }
+    func setBusy(_ b: Bool) { b ? spinner.startAnimation(nil) : spinner.stopAnimation(nil); for x in buttons where x.title != "Clear" && x.title != "Quit" { x.isEnabled = !b }; refreshTiles() }
     func appendLog(_ s: String) {
         let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular), .foregroundColor: T.text]
         log.textStorage?.append(NSAttributedString(string: s, attributes: attrs)); log.scrollToEndOfDocument(nil)
         activityLog.textStorage?.append(NSAttributedString(string: s, attributes: attrs)); activityLog.scrollToEndOfDocument(nil)
-        if let last = s.split(separator: "\n").last(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) { drawerLine.stringValue = String(last).trimmingCharacters(in: .whitespaces) }
     }
     var profile: String { profiles.titleOfSelectedItem ?? "Default" }
 
     // MARK: actions
     @objc func play() { run(["play"]) }
     @objc func playModded() { run(["play-modded", profile]) }
+    /// The hero's one Play button follows the Vanilla / Mods switch.
+    @objc func playSelected() { modeSwitch.selected == 1 ? playModded() : play() }
+    func setMode(_ mode: String) {
+        let mods = mode == "mods"; UserDefaults.standard.set(mods ? "mods" : "vanilla", forKey: "lc.mode")
+        if modeSwitch.selected != (mods ? 1 : 0) { modeSwitch.selected = mods ? 1 : 0 }
+        profilesHome.isHidden = !mods; playButton.title = mods ? "▶  Play with mods" : "▶  Play"; playButton.refresh()
+    }
     @objc func build() {
         let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.allowsMultipleSelection = false
         panel.message = "Choose your \"Lethal Company\" folder (copied from a Windows Steam install: Steam > Lethal Company > Manage > Browse local files)"; panel.prompt = "Build"
@@ -558,9 +739,7 @@ final class Launcher: NSObject, NSApplicationDelegate, NSCollectionViewDataSourc
     }
     @objc func checkGame() { run(["check-update"]) }
     @objc func addToSteam() {
-        run(["steam-shortcut"]) {  // keep the command's closing hint ("Restart Steam once ...") in the drawer bar instead of "Done"
-            if let last = self.log.string.split(separator: "\n").last(where: { let t = $0.trimmingCharacters(in: .whitespaces); return !t.isEmpty && !t.hasPrefix("(exited") }) { self.drawerLine.stringValue = String(last).trimmingCharacters(in: .whitespaces) }
-        }
+        run(["steam-shortcut"])  // its "##done" line carries the "restart Steam once" hint
     }
     @objc func checkLauncher() { run(["self-update"]) }
     @objc func clearLog() { log.string = ""; activityLog.string = "" }

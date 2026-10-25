@@ -79,7 +79,7 @@ class ModsJSONTest(unittest.TestCase):
     def test_apply_removes_before_install_then_audits(self):
         calls = []
         with mock.patch.object(mods, "remove", lambda prof, name: calls.append(("remove", prof, name))), \
-             mock.patch.object(mods, "install", lambda prof, refs, pinned=None: calls.append(("install", prof, list(refs)))), \
+             mock.patch.object(mods, "install", lambda prof, refs, pinned=None, span=None: calls.append(("install", prof, list(refs)))), \
              mock.patch.object(mods, "audit", lambda prof, save=True: calls.append(("audit", prof, save))):
             out = self.run_main("apply", "P", "--install", "A-a", "B-b", "--remove", "C-c", "D-d")
         self.assertEqual(calls, [("remove", "P", "C-c"), ("remove", "P", "D-d"), ("install", "P", ["A-a", "B-b"]), ("audit", "P", True)])
