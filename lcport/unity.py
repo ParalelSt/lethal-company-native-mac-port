@@ -31,7 +31,7 @@ def batch(editor_app, proj, logname, method=None, build_path=None, timeout=7200)
         raise RuntimeError("Unity build failed: " + (m.group(1)[:300] if m else f"see {logf}"))
     return logf
 
-def full_build(editor_app, proj, out_app):
+def full_build(editor_app, proj, out_app, game_dir=None):
     with Step("Unity: import project and resolve packages (first import takes a while)"):
         batch(editor_app, proj, "unity-import")
     with Step("Unity: point materials at package shaders"):
@@ -42,4 +42,14 @@ def full_build(editor_app, proj, out_app):
         batch(editor_app, proj, "unity-transcode", "TranscodeVideos.Run")
     with Step("Unity: build the macOS app (compiles every shader for Metal; 30-60 min)"):
         batch(editor_app, proj, "unity-build", "BuildMac.Build", build_path=out_app)
+    if game_dir:
+        with Step("ship the game's original assemblies (byte-identical IL for mods)"):
+            from . import dotnetmeta
+            managed = glob.glob(os.path.join(game_dir, "*_Data", "Managed"))[0]
+            dst = os.path.join(out_app, "Contents", "Resources", "Data", "Managed")
+            for name in ("Assembly-CSharp.dll", "Assembly-CSharp-firstpass.dll"):
+                src = os.path.join(managed, name)
+                if not os.path.exists(src): continue
+                n = dotnetmeta.retarget(src, os.path.join(dst, name), "Facepunch.Steamworks.Win64", "Facepunch.Steamworks.Posix")
+                log(f"    {name}: original IL, {n} reference(s) retargeted")
     return out_app

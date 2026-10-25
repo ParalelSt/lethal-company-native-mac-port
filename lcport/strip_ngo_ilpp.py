@@ -122,8 +122,7 @@ def strip_file(src, log):
     out.append(src[pos:]); src = "".join(out)
     return src, n_ok, n_fail
 
-def main():
-    root = sys.argv[1]; apply = "--apply" in sys.argv
+def run(root, apply=True):
     tot_ok = tot_fail = files = 0; log = []
     for dp, _, fs in os.walk(root):
         for f in fs:
@@ -150,4 +149,4 @@ def main():
     for l in log[:40]: print(" ", l)
 
 if __name__ == "__main__":
-    main()
+    run(sys.argv[1], "--apply" in sys.argv)

@@ -15,20 +15,25 @@ def export(game_dir, out_dir):
     exe = assetripper()
     if os.path.isdir(os.path.join(out_dir, "ExportedProject", "Assets")):
         log("    rip already present, skipping"); return os.path.join(out_dir, "ExportedProject")
-    shutil.rmtree(out_dir, ignore_errors=True); os.makedirs(out_dir, exist_ok=True)
+    # start clean but keep Unity's Library (shader cache) from a previous build: it makes rebuilds much faster
+    proj = os.path.join(out_dir, "ExportedProject"); lib = os.path.join(proj, "Library"); keep = os.path.join(out_dir, "..", "Library.keep")
+    if os.path.isdir(lib): shutil.move(lib, keep)
+    shutil.rmtree(out_dir, ignore_errors=True); os.makedirs(proj, exist_ok=True)
+    if os.path.isdir(keep): shutil.move(keep, lib)
     p = subprocess.Popen([exe, "--headless", "--port", str(PORT), "--log-path", os.path.join(config.WORK, "assetripper.log")], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         for _ in range(60):
             try: urllib.request.urlopen(f"http://127.0.0.1:{PORT}/", timeout=2); break
             except Exception: time.sleep(1)
-        # export game assemblies as DLLs (byte-identical IL for mods); package DLLs are replaced by real packages later
-        _post("/Settings/Update", {"ScriptExportMode": "DllExportWithoutRenaming", "ScriptContentLevel": "Level2",
+        # Hybrid: game code is decompiled to C# (Unity only binds scene data to scripts it compiles itself);
+        # the original assemblies are swapped back into the built app afterwards so mods see identical IL
+        _post("/Settings/Update", {"ScriptExportMode": "Hybrid", "ScriptContentLevel": "Level2",
                                    "ShaderExportMode": "Dummy", "BundledAssetsExportMode": "DirectExport", "TextExportMode": "Parse",
                                    "AudioExportFormat": "Default", "ImageExportFormat": "Png", "LightmapTextureExportFormat": "Yaml",
                                    "SpriteExportMode": "Yaml", "ScriptLanguageVersion": "AutoSafe"})
         page = urllib.request.urlopen(f"http://127.0.0.1:{PORT}/Settings/Edit", timeout=30).read().decode()
-        if 'value="DllExportWithoutRenaming" selected' not in page:
-            raise RuntimeError("could not switch AssetRipper to DLL export mode")
+        if 'value="Hybrid" selected' not in page:
+            raise RuntimeError("could not switch AssetRipper to Hybrid script export mode")
         log("    loading game folder"); _post("/LoadFolder", {"Path": game_dir})
         log("    exporting Unity project"); _post("/Export/UnityProject", {"Path": out_dir})
     finally:

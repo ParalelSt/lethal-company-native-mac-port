@@ -4,6 +4,7 @@ from . import config, dotnetmeta, thirdparty
 from .util import log, Step, md5
 from . import remap_package_scripts as remap
 from . import remap_shadergraph_materials as sgmat
+from . import strip_ngo_ilpp
 
 PKG_RE = re.compile(rb"PackageCache[\\/](com\.unity\.[a-z0-9.-]+)@([0-9][0-9A-Za-z.+-]*)")
 YAML_EXTS = (".unity", ".prefab", ".asset", ".controller", ".mat", ".playable", ".mixer", ".overrideController", ".anim", ".preset")
@@ -105,11 +106,10 @@ def assemble(proj, game_dir, editor_app, natives_dir):
             if name in builtin and builtin[name][1] not in pkgdirs: pkgdirs.append(builtin[name][1])
     with Step("remap MonoScript references to package scripts"):
         remap.run(proj, os.path.join(config.WORK, "replaced_dlls.json"), pkgdirs)
-    with Step("use the game's original assemblies byte-for-byte (AssetRipper re-saves them) and enable them for the Editor"):
-        managed = glob.glob(os.path.join(game_dir, "*_Data", "Managed"))[0]
-        for dll in glob.glob(os.path.join(plugins, "*.dll")):
-            src = os.path.join(managed, os.path.basename(dll))
-            if os.path.exists(src): shutil.copy2(src, dll)
+    with Step("strip Netcode's injected RPC code from the decompiled game scripts (regenerated on compile)"):
+        src_dir = os.path.join(proj, "Assets", "Scripts", "Assembly-CSharp")
+        if os.path.isdir(src_dir): strip_ngo_ilpp.run(src_dir)
+    with Step("enable precompiled third-party assemblies for the Editor (AssetRipper disables them)"):
         for meta in glob.glob(os.path.join(plugins, "*.dll.meta")):
             if meta.endswith("Facepunch.Steamworks.Posix.dll.meta"): continue
             g = _guid(meta)  # read before truncating

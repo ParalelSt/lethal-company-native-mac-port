@@ -58,7 +58,7 @@ def cmd_build(args):
         project.assemble(proj, game, app, thirdparty.natives()); open(marker, "w").write("ok")
     else: log("==> project already assembled, skipping")
     out_app = os.path.join(config.WORK, "build", f"{config.APP_NAME}.app")
-    unity.full_build(app, proj, out_app)
+    unity.full_build(app, proj, out_app, game)
     install.install_app(out_app, game); install.install_modded_launcher()
     with Step("record game shaders for the mod audit"):
         record_game_shaders()
