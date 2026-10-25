@@ -31,11 +31,12 @@ final class Card: NSView {
 final class FlatButton: NSButton {
     var fill: NSColor = T.accent { didSet { refresh() } }
     var textColor: NSColor = NSColor(srgbRed: 0.10, green: 0.05, blue: 0.02, alpha: 1) { didSet { refresh() } }
-    var padding: CGFloat = 18
+    var padding: CGFloat = 12
     convenience init(_ title: String, fill: NSColor, text: NSColor, bold: Bool = true, target: AnyObject?, action: Selector) {
         self.init(frame: .zero); self.title = title; self.fill = fill; self.textColor = text; self.target = target; self.action = action
-        isBordered = false; wantsLayer = true; layer?.cornerRadius = 8; font = bold ? .boldSystemFont(ofSize: 13) : .systemFont(ofSize: 13)
-        translatesAutoresizingMaskIntoConstraints = false; heightAnchor.constraint(equalToConstant: 34).isActive = true; refresh()
+        isBordered = false; wantsLayer = true; layer?.cornerRadius = 7; font = .systemFont(ofSize: 12.5, weight: bold ? .semibold : .regular)
+        translatesAutoresizingMaskIntoConstraints = false; heightAnchor.constraint(equalToConstant: 30).isActive = true
+        setContentCompressionResistancePriority(.required, for: .horizontal); setContentHuggingPriority(.defaultHigh, for: .horizontal); refresh()
     }
     func refresh() {
         layer?.backgroundColor = (isEnabled ? fill : fill.withAlphaComponent(0.4)).cgColor
@@ -114,7 +115,7 @@ final class Launcher: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
         reloadInstalled { self.doSearch() }
         if let path = ProcessInfo.processInfo.environment["LC_SNAPSHOT"] {
             if let tab = ProcessInfo.processInfo.environment["LC_SNAPSHOT_TAB"] { show(tab) }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 6) { self.snapshot(to: path); NSApp.terminate(nil) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 9) { self.snapshot(to: path); NSApp.terminate(nil) }
         }
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ s: NSApplication) -> Bool { true }
@@ -126,7 +127,9 @@ final class Launcher: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
     // MARK: helpers
     func label(_ s: String, size: CGFloat = 13, color: NSColor = T.muted, weight: NSFont.Weight = .regular, wrap: Bool = true) -> NSTextField {
         let l = wrap ? NSTextField(wrappingLabelWithString: s) : NSTextField(labelWithString: s)
-        l.font = .systemFont(ofSize: size, weight: weight); l.textColor = color; l.isSelectable = false; l.translatesAutoresizingMaskIntoConstraints = false; return l
+        l.font = .systemFont(ofSize: size, weight: weight); l.textColor = color; l.isSelectable = false; l.translatesAutoresizingMaskIntoConstraints = false
+        if !wrap { l.lineBreakMode = .byTruncatingTail; l.setContentCompressionResistancePriority(.defaultLow, for: .horizontal) }
+        return l
     }
     func flat(_ title: String, _ sel: Selector, primary: Bool = false) -> FlatButton {
         let b = FlatButton(title, fill: primary ? T.accent : T.card2, text: primary ? NSColor(srgbRed: 0.10, green: 0.05, blue: 0.02, alpha: 1) : T.text, target: self, action: sel); buttons.append(b); return b
@@ -134,7 +137,7 @@ final class Launcher: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
     func vstack(_ views: [NSView], spacing: CGFloat = 8, insets: NSEdgeInsets = NSEdgeInsets()) -> NSStackView {
         let s = NSStackView(views: views); s.orientation = .vertical; s.alignment = .leading; s.spacing = spacing; s.edgeInsets = insets; s.translatesAutoresizingMaskIntoConstraints = false; return s
     }
-    func hstack(_ views: [NSView], spacing: CGFloat = 8) -> NSStackView { let s = NSStackView(views: views); s.spacing = spacing; s.translatesAutoresizingMaskIntoConstraints = false; return s }
+    func hstack(_ views: [NSView], spacing: CGFloat = 8) -> NSStackView { let s = NSStackView(views: views); s.spacing = spacing; s.distribution = .fill; s.setClippingResistancePriority(.defaultLow, for: .horizontal); s.translatesAutoresizingMaskIntoConstraints = false; return s }
     func fill(_ child: NSView, in parent: NSView, insets: NSEdgeInsets = NSEdgeInsets()) {
         parent.addSubview(child); child.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([child.leadingAnchor.constraint(equalTo: parent.leadingAnchor, constant: insets.left), child.trailingAnchor.constraint(equalTo: parent.trailingAnchor, constant: -insets.right),
@@ -144,7 +147,7 @@ final class Launcher: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
 
     // MARK: window
     func buildWindow() {
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1040, height: 740), styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: ProcessInfo.processInfo.environment["LC_SNAPSHOT_SMALL"] == "1" ? 940 : 1040, height: ProcessInfo.processInfo.environment["LC_SNAPSHOT_SMALL"] == "1" ? 640 : 740), styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         window.title = "Lethal Company for macOS"; window.titlebarAppearsTransparent = true; window.titleVisibility = .hidden
         window.appearance = NSAppearance(named: .darkAqua); window.backgroundColor = T.canvas; window.center(); window.minSize = NSSize(width: 940, height: 640)
         let root = NSView(); root.wantsLayer = true; root.layer?.backgroundColor = T.canvas.cgColor; window.contentView = root
@@ -201,7 +204,7 @@ final class Launcher: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
         let status = Card(); var rows: [NSView] = [label("STATUS", size: 11, color: T.muted, weight: .semibold, wrap: false)]
         for (key, name) in [("game", "Game"), ("steam", "Steam"), ("unity", "Unity"), ("launcher", "Launcher")] {
             let k = label(name, size: 13, color: T.text, weight: .medium, wrap: false); k.widthAnchor.constraint(equalToConstant: 80).isActive = true
-            let v = label("", size: 13, color: T.text, wrap: false); let hint = label("", size: 12, color: T.muted, wrap: false)
+            let v = label("", size: 13, color: T.text, wrap: false); let hint = label("", size: 12, color: T.muted, wrap: false); hint.setContentHuggingPriority(.defaultLow, for: .horizontal)
             statusRows[key] = (v, hint); rows.append(hstack([k, v, hint], spacing: 12))
         }
         let statusStack = vstack(rows, spacing: 9, insets: NSEdgeInsets(top: 14, left: 16, bottom: 14, right: 16)); fill(statusStack, in: status)
@@ -209,10 +212,11 @@ final class Launcher: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
         let buildCard = Card(); fill(vstack([label("BUILD / UPDATE GAME", size: 11, color: T.muted, weight: .semibold, wrap: false),
             label("Pick your \"Lethal Company\" folder from a Windows Steam install (Steam › Manage › Browse local files). The launcher checks Steam ownership, extracts the game, swaps the Windows-only parts, compiles the shaders for Metal and installs the app. About an hour the first time, much less afterwards. Run it again when the game updates.", size: 12.5),
             flat("Choose folder and build…", #selector(build), primary: true)], spacing: 10, insets: NSEdgeInsets(top: 14, left: 16, bottom: 14, right: 16)), in: buildCard)
+        let updBtns = vstack([flat("Check for game update", #selector(checkGame)), hstack([flat("How it works", #selector(howItWorks)), flat("Quit", #selector(quit))])], spacing: 8)
         let upd = Card(); fill(vstack([label("UPDATES & HELP", size: 11, color: T.muted, weight: .semibold, wrap: false),
             label("The launcher checks for a newer launcher release when it starts. Game updates are detected against Steam's public build; when one ships, copy the new Windows folder over and run Build / Update again.", size: 12.5),
-            hstack([flat("Check for game update", #selector(checkGame)), flat("How it works", #selector(howItWorks)), flat("Quit", #selector(quit))])], spacing: 10, insets: NSEdgeInsets(top: 14, left: 16, bottom: 14, right: 16)), in: upd)
-        let grid = hstack([buildCard, upd], spacing: 14); grid.distribution = .fillEqually
+            updBtns], spacing: 10, insets: NSEdgeInsets(top: 14, left: 16, bottom: 14, right: 16)), in: upd)
+        let grid = hstack([buildCard, upd], spacing: 14); grid.distribution = .fillEqually; grid.alignment = .top
         let body = vstack([status, grid], spacing: 14, insets: NSEdgeInsets(top: 18, left: 28, bottom: 20, right: 28))
         status.widthAnchor.constraint(equalTo: body.widthAnchor, constant: -56).isActive = true; grid.widthAnchor.constraint(equalTo: body.widthAnchor, constant: -56).isActive = true
         let scroll = NSScrollView(); scroll.drawsBackground = false; scroll.hasVerticalScroller = true; scroll.translatesAutoresizingMaskIntoConstraints = false
@@ -231,12 +235,12 @@ final class Launcher: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
         let title = label("Mods", size: 24, color: T.text, weight: .bold, wrap: false)
         let intro = label("Browse Thunderstore and install with one click. Mods go into the selected profile; play them from Home with \"Play with mods\". ✓ works on Mac · ◐ visuals fixed automatically at runtime · ✗ needs porting work.", size: 12.5)
         styledPopup(profiles); profiles.target = self; profiles.action = #selector(profileChanged)
-        importField.placeholderString = "Paste a Thunderstore / r2modman profile code"; importField.translatesAutoresizingMaskIntoConstraints = false; importField.widthAnchor.constraint(equalToConstant: 300).isActive = true; importField.font = .systemFont(ofSize: 13)
-        let row1 = hstack([label("Profile", size: 13, color: T.text, weight: .medium, wrap: false), profiles, flat("New…", #selector(newProfile)), flat("Open folder", #selector(openProfile)), NSView(), importField, flat("Import code", #selector(importCode), primary: true)], spacing: 8)
-        search.placeholderString = "Search mods"; search.delegate = self; search.translatesAutoresizingMaskIntoConstraints = false; search.widthAnchor.constraint(equalToConstant: 300).isActive = true; search.font = .systemFont(ofSize: 13)
+        importField.placeholderString = "Paste a Thunderstore / r2modman profile code"; importField.translatesAutoresizingMaskIntoConstraints = false; importField.widthAnchor.constraint(greaterThanOrEqualToConstant: 160).isActive = true; importField.setContentHuggingPriority(.defaultLow, for: .horizontal); importField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal); importField.font = .systemFont(ofSize: 13)
+        let row1 = hstack([label("Profile", size: 13, color: T.text, weight: .medium, wrap: false), profiles, flat("New…", #selector(newProfile)), flat("Open folder", #selector(openProfile)), importField, flat("Import code", #selector(importCode), primary: true)], spacing: 8)
+        search.placeholderString = "Search mods"; search.delegate = self; search.translatesAutoresizingMaskIntoConstraints = false; search.widthAnchor.constraint(greaterThanOrEqualToConstant: 160).isActive = true; search.setContentHuggingPriority(.defaultLow, for: .horizontal); search.setContentCompressionResistancePriority(.defaultLow, for: .horizontal); search.font = .systemFont(ofSize: 13)
         installedOnly.target = self; installedOnly.action = #selector(doSearch); installedOnly.font = .systemFont(ofSize: 13); installedOnly.contentTintColor = T.text
         modCount = label("", size: 12, color: T.muted, wrap: false)
-        let row2 = hstack([search, installedOnly, modCount, NSView(), flat("Audit profile", #selector(auditProfile)), flat("Update all", #selector(updateMods))], spacing: 10)
+        let row2 = hstack([search, installedOnly, modCount, flat("Audit profile", #selector(auditProfile)), flat("Update all", #selector(updateMods))], spacing: 10)
         table = NSTableView(); table.dataSource = self; table.delegate = self; table.rowHeight = 70; table.headerView = nil; table.backgroundColor = .clear; table.selectionHighlightStyle = .none; table.intercellSpacing = NSSize(width: 0, height: 0)
         table.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("mod"))); table.columnAutoresizingStyle = .firstColumnOnlyAutoresizingStyle
         let tscroll = NSScrollView(); tscroll.documentView = table; tscroll.hasVerticalScroller = true; tscroll.drawsBackground = false; tscroll.translatesAutoresizingMaskIntoConstraints = false
