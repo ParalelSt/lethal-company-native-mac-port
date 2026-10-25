@@ -1,8 +1,10 @@
-<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>netstandard2.1</TargetFramework><AssemblyName>MacShaderFix</AssemblyName><LangVersion>9</LangVersion><Nullable>disable</Nullable><DebugType>none</DebugType><Version>1.0.0</Version><GenerateAssemblyInfo>false</GenerateAssemblyInfo></PropertyGroup>
+<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>netstandard2.1</TargetFramework><AssemblyName>MacShaderFix</AssemblyName><LangVersion>9</LangVersion><Nullable>disable</Nullable><DebugType>none</DebugType><Version>1.1.0</Version><GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+<UnityManaged Condition="'$(UnityManaged)'==''">/Users/aronmatoic/Applications/Lethal Company.app/Contents/Resources/Data/Managed</UnityManaged>
+<BepInExCore Condition="'$(BepInExCore)'==''">/Users/aronmatoic/Documents/Main Projects/lethal-company-mac/natives/bepinex/BepInEx/core</BepInExCore></PropertyGroup>
 <ItemGroup>
-<Reference Include="BepInEx"><HintPath>/Users/aronmatoic/Documents/Main Projects/lethal-company-mac/natives/bepinex/BepInEx/core/BepInEx.dll</HintPath></Reference>
-<Reference Include="0Harmony"><HintPath>/Users/aronmatoic/Documents/Main Projects/lethal-company-mac/natives/bepinex/BepInEx/core/0Harmony.dll</HintPath></Reference>
-<Reference Include="UnityEngine"><HintPath>/Users/aronmatoic/Applications/Lethal Company.app/Contents/Resources/Data/Managed/UnityEngine.dll</HintPath></Reference>
-<Reference Include="UnityEngine.CoreModule"><HintPath>/Users/aronmatoic/Applications/Lethal Company.app/Contents/Resources/Data/Managed/UnityEngine.CoreModule.dll</HintPath></Reference>
-<Reference Include="UnityEngine.AssetBundleModule"><HintPath>/Users/aronmatoic/Applications/Lethal Company.app/Contents/Resources/Data/Managed/UnityEngine.AssetBundleModule.dll</HintPath></Reference>
+<Reference Include="BepInEx"><HintPath>$(BepInExCore)/BepInEx.dll</HintPath></Reference>
+<Reference Include="0Harmony"><HintPath>$(BepInExCore)/0Harmony.dll</HintPath></Reference>
+<Reference Include="UnityEngine"><HintPath>$(UnityManaged)/UnityEngine.dll</HintPath></Reference>
+<Reference Include="UnityEngine.CoreModule"><HintPath>$(UnityManaged)/UnityEngine.CoreModule.dll</HintPath></Reference>
+<Reference Include="UnityEngine.AssetBundleModule"><HintPath>$(UnityManaged)/UnityEngine.AssetBundleModule.dll</HintPath></Reference>
 </ItemGroup></Project>
