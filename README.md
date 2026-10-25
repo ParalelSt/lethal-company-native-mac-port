@@ -12,7 +12,7 @@ The repository contains **no game files**. You bring the game; the launcher turn
 - The `Lethal Company` folder from a Windows Steam install (Steam > Lethal Company > Manage > Browse local files), copied to the Mac.
 
 ## Do
-1. Download this repository and unzip it.
+1. Download the latest launcher zip from the Releases page and unzip it (the launcher offers updates by itself afterwards).
 2. Right-click `Lethal Company Port.app` > Open, then click **Build / Update** and choose your `Lethal Company` folder.
 3. Wait (about an hour the first time, mostly shader compilation). Then launch **Lethal Company** from Spotlight. Keep Steam running.
 
@@ -35,6 +35,7 @@ mods that work as-is, mods whose Windows-only bundle shaders are remapped automa
 porting work. Launch with **Lethal Company Modded**.
 
 ## Updates
+The launcher checks for a newer launcher release on start; each release lists what was added, changed and removed (see CHANGELOG.md).
 `python3 -m lcport check-update` compares Steam's public build with the one you built from. When the game updates,
 copy the new Windows folder over and run Build / Update again.
 

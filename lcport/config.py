@@ -1,5 +1,6 @@
 import os
 APPID = 1966720
+REPO = "ParalelSt/lethal-company-mac"      # GitHub repository used for launcher self-updates and releases
 KIT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SUPPORT = os.path.expanduser("~/Library/Application Support/LethalCompanyMac")
 WORK = os.path.join(SUPPORT, "work")          # rip output, Unity project, downloads

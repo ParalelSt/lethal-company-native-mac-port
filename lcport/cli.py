@@ -1,4 +1,4 @@
-"""Command line + simple dialog-driven menu. Commands: setup, build <game folder>, play, play-modded [profile], mods ..., check-update, menu"""
+"""Command line + simple dialog-driven menu. Commands: setup, build <game folder>, play, play-modded [profile], mods ..., check-update, self-update, version, menu"""
 import os, sys, subprocess, time, shutil, glob, json
 from . import config
 
@@ -100,9 +100,15 @@ def ask_game_dir():
 
 def cmd_menu(args):
     from .util import dialog
+    from . import __version__, selfupdate
+    upd = selfupdate.available()
+    if upd:
+        notes = upd["notes"].strip().replace('"', "'")[:500]
+        if dialog(f"Launcher {upd['version']} is available (you have {__version__}).\n\n{notes}", buttons=("Later", "Update"), default="Update") == "Update":
+            selfupdate.apply(upd); print("Updated. Please reopen the launcher."); return
     while True:
         built = os.path.exists(config.APP_DST)
-        choice = dialog("Lethal Company native macOS port", buttons=("Mods", "Build / Update", "Play") if built else ("Quit", "Build / Update"), default="Play" if built else "Build / Update")
+        choice = dialog(f"Lethal Company native macOS port  (launcher {__version__})", buttons=("Mods", "Build / Update", "Play") if built else ("Quit", "Build / Update"), default="Play" if built else "Build / Update")
         if choice == "Play": cmd_play([]); continue
         if choice == "Build / Update":
             d = ask_game_dir()
@@ -125,6 +131,11 @@ def main():
         elif cmd == "play-modded": cmd_play(a[1:], modded=True)
         elif cmd == "mods":
             from . import mods; mods.main(a[1:])
+        elif cmd == "version":
+            from . import __version__; print(__version__)
+        elif cmd == "self-update":
+            from . import selfupdate
+            u = selfupdate.available(); print("already up to date" if not u else "updating...") ; u and selfupdate.apply(u)
         elif cmd == "check-update":
             from . import check_update; sys.exit(check_update.check(notify="--notify" in a, accept="--accept" in a))
         elif cmd == "menu": cmd_menu(a[1:])
