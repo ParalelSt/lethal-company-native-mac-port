@@ -16,8 +16,6 @@ The repository contains **no game files**. You bring the game; the launcher turn
 2. Right-click `Lethal Company Port.app` > Open, then click **Build / Update** and choose your `Lethal Company` folder.
 3. Wait (about an hour the first time, mostly shader compilation). Then launch **Lethal Company** from Spotlight. Keep Steam running.
 
-Same thing from a terminal: `python3 -m lcport build "/path/to/Lethal Company"`, then `python3 -m lcport play`.
-
 Press Add to Steam once; after that Play starts the game through Steam so the Steam overlay works.
 
 ## Getting the Windows copy
@@ -44,8 +42,6 @@ must own the game on the Steam account you use. Three ways, best first.
 1. Install the Windows Steam client in the wrapper and download the game there.
 2. Pick the folder inside the wrapper. For Porting Kit it looks like
    `~/Applications/<wrapper name>.app/Contents/SharedSupport/prefix/drive_c/Program Files (x86)/Steam/steamapps/common/Lethal Company`.
-
-This is how the author did it.
 
 The launcher only reads that folder; it never changes it. You can delete it after the build if you want the space back
 (the build keeps what it needs in `~/Library/Application Support/LethalCompanyMac`).
