@@ -88,11 +88,19 @@ def cmd_play(args, modded=False):
     env = {}; extra = []
     if modded:
         from .mods import profile_dir
-        bep = profile_dir(args[0] if args else "Default")
+        pname = args[0] if args else "Default"
+        bep = profile_dir(pname)
+        try: n = len([f for f in os.listdir(os.path.join(bep, "plugins")) if f != "MacShaderFix" and not f.startswith(".")])
+        except OSError: n = 0
+        print(f"Launching Lethal Company with profile {pname} ({n} mods)", flush=True)
         env = {"DOORSTOP_ENABLED": "1", "DOORSTOP_TARGET_ASSEMBLY": os.path.join(bep, "core", "BepInEx.Preloader.dll"),
                "DOORSTOP_IGNORE_DISABLED_ENV": "0", "DYLD_INSERT_LIBRARIES": os.path.join(thirdparty.bepinex(), "libdoorstop.dylib")}
-    p = steam.launch(config.APP_DST, extra, env, logfile=os.path.join(config.WORK, "player-modded.log" if modded else "player.log"))
-    p.wait()
+    if not modded: print("Launching Lethal Company (vanilla)", flush=True)
+    logfile = os.path.join(config.WORK, "player-modded.log" if modded else "player.log")
+    p = steam.launch(config.APP_DST, extra, env, logfile=logfile)
+    print(f"Game running (pid {p.pid}), log: {logfile}", flush=True)
+    code = p.wait()
+    print(f"Game closed (exit {code})", flush=True)
 
 def ask_game_dir():
     from .util import ask_folder

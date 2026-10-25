@@ -306,7 +306,10 @@ final class Launcher: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
         let current = profiles.titleOfSelectedItem
         for pop in [profiles, profilesHome] where Set(names.isEmpty ? ["Default"] : names) != Set(pop.itemTitles) {
             pop.removeAllItems(); pop.addItems(withTitles: names.isEmpty ? ["Default"] : names)
+            let saved = UserDefaults.standard.string(forKey: "lc.profile")
             if let c = current, names.contains(c) { pop.selectItem(withTitle: c) }
+            else if let c = saved, names.contains(c) { pop.selectItem(withTitle: c) }
+            else if names.contains("Default") { pop.selectItem(withTitle: "Default") }
         }
     }
     func set(_ key: String, _ value: String, _ hint: String, _ color: NSColor) { guard let r = statusRows[key] else { return }; r.0.stringValue = value; r.0.textColor = color; r.1.stringValue = hint }
@@ -392,7 +395,7 @@ final class Launcher: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
     }
 
     // MARK: mods
-    @objc func profileChanged() { profilesHome.selectItem(withTitle: profile); reloadInstalled { self.table.reloadData() } }
+    @objc func profileChanged() { UserDefaults.standard.set(profile, forKey: "lc.profile"); profilesHome.selectItem(withTitle: profile); reloadInstalled { self.table.reloadData() } }
     @objc func profileChangedHome() { if let t = profilesHome.titleOfSelectedItem { profiles.selectItem(withTitle: t) }; profileChanged() }
     func reloadInstalled(_ done: (() -> Void)? = nil) {
         kitJSON(["mods", "json-installed", profile]) { obj in
