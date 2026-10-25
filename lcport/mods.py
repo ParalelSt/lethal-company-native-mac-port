@@ -23,7 +23,7 @@ def http(url, binary=False):
 def index():
     os.makedirs(config.CACHE, exist_ok=True); p = os.path.join(config.CACHE, "thunderstore-index.json")
     if os.path.exists(p) and time.time() - os.path.getmtime(p) < 3600: return json.load(open(p))
-    print("fetching Thunderstore package index...", flush=True)
+    print("fetching Thunderstore package index...", file=sys.stderr, flush=True)
     data = json.loads(http(INDEX_URL)); json.dump(data, open(p, "w")); return data
 
 def by_name(idx): return {p["full_name"]: p for p in idx}
@@ -207,15 +207,37 @@ def audit(profile, save=True):
         lines.append("")
     report = "\n".join(lines); print(report)
     if save:
-        os.makedirs(config.PROFILES, exist_ok=True)
-        rp = os.path.join(config.PROFILES, name_safe(profile) + "-audit.txt"); open(rp, "w").write(report); print(f"(saved to {rp})")
+        os.makedirs(os.path.join(config.PROFILES, profile), exist_ok=True)
+        rp = os.path.join(config.PROFILES, profile, "audit.txt"); open(rp, "w").write(report)
+        js = {}
+        for grp, items in (("ok", ok), ("auto", auto), ("fix", fix)):
+            for n, v, rs in items: js[n] = {"group": grp, "version": v, "notes": rs}
+        json.dump(js, open(os.path.join(config.PROFILES, profile, "audit.json"), "w"), indent=1)
+        print(f"(saved to {rp})")
     return fix
 
 def name_safe(s): return re.sub(r"[^A-Za-z0-9_.-]", "_", s)
 
+def json_search(query, limit=300):
+    q = query.lower().strip(); out = []
+    for p in index():
+        if p.get("is_deprecated"): continue
+        v = p["versions"][0]
+        if q and q not in p["full_name"].lower() and q not in v["description"].lower(): continue
+        out.append({"full_name": p["full_name"], "name": p["name"], "owner": p["owner"], "version": v["version_number"],
+                    "downloads": sum(x.get("downloads", 0) for x in p["versions"]), "rating": p.get("rating_score", 0),
+                    "description": v["description"], "categories": p.get("categories", [])})
+    out.sort(key=lambda x: -x["downloads"])
+    return out[:limit]
+
 def main(a):
     if not a or a[0] in ("-h", "--help"): print(__doc__); return
     cmd = a[0]
+    if cmd == "json-search": print(json.dumps(json_search(" ".join(a[1:])))); return
+    if cmd == "json-installed":
+        prof = a[1]; ap = os.path.join(config.PROFILES, prof, "audit.json")
+        aud = json.load(open(ap)) if os.path.exists(ap) else {}
+        print(json.dumps({"installed": load_manifest(prof), "audit": aud})); return
     if cmd == "profiles":
         os.makedirs(config.PROFILES, exist_ok=True)
         for p in sorted(os.listdir(config.PROFILES)):

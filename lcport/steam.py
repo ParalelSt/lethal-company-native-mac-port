@@ -30,10 +30,16 @@ def owns_game(shim_dir):
     finally:
         s.SteamAPI_Shutdown()
 
+OVERLAY = os.path.expanduser("~/Library/Application Support/Steam/Steam.AppBundle/Steam/Contents/MacOS/gameoverlayrenderer.dylib")
+
 def launch(app, extra_args=(), env=None, logfile=None):
     from .install import reset_window_state
     reset_window_state()
     exe = os.path.join(app, "Contents", "MacOS", config.APP_NAME)
     args = [exe] + (["-logFile", logfile] if logfile else []) + list(extra_args)
     e = dict(os.environ); e.update(env or {})
+    # Steam overlay (Shift+Tab): Steam injects this library into games it starts; do the same here
+    e.setdefault("SteamAppId", str(config.APPID)); e.setdefault("SteamGameId", str(config.APPID)); e.setdefault("SteamOverlayGameId", str(config.APPID))
+    if os.path.exists(OVERLAY) and os.environ.get("LC_NO_OVERLAY") != "1":
+        e["DYLD_INSERT_LIBRARIES"] = OVERLAY + (":" + e["DYLD_INSERT_LIBRARIES"] if e.get("DYLD_INSERT_LIBRARIES") else "")
     return subprocess.Popen(args, env=e, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
