@@ -18,6 +18,7 @@ public class MacShaderFix : BaseUnityPlugin
     internal static ManualLogSource Log;
     static readonly Dictionary<string, Shader> game = new Dictionary<string, Shader>();   // name -> game's shader instance
     static readonly HashSet<int> gameIds = new HashSet<int>();                            // instance ids of game shaders
+    static readonly HashSet<int> bundleIds = new HashSet<int>();                          // instance ids of shaders that came from mod bundles
     static readonly HashSet<int> seen = new HashSet<int>();
     static readonly HashSet<string> loggedFallback = new HashSet<string>();
     static Shader lit, unlit;
@@ -44,7 +45,7 @@ public class MacShaderFix : BaseUnityPlugin
         var fromBundles = new HashSet<int>();
         foreach (var b in AssetBundle.GetAllLoadedAssetBundles())
         {
-            try { foreach (var s in b.LoadAllAssets<Shader>()) fromBundles.Add(s.GetInstanceID()); } catch { }
+            try { foreach (var s in b.LoadAllAssets<Shader>()) { fromBundles.Add(s.GetInstanceID()); bundleIds.Add(s.GetInstanceID()); } } catch { }
         }
         foreach (var s in Resources.FindObjectsOfTypeAll<Shader>())
         {
@@ -62,6 +63,7 @@ public class MacShaderFix : BaseUnityPlugin
         if (__result == null) return;
         try
         {
+            try { foreach (var s in __result.LoadAllAssets<Shader>()) bundleIds.Add(s.GetInstanceID()); } catch { }
             int n = 0;
             foreach (var mat in __result.LoadAllAssets<Material>()) if (SafeFix(mat)) n++;
             if (n > 0) Log.LogInfo($"bundle '{__result.name}': remapped {n} materials");
@@ -99,6 +101,12 @@ public class MacShaderFix : BaseUnityPlugin
         if (sh != null && gameIds.Contains(sh.GetInstanceID())) { seen.Add(id); return false; }   // game's own shader: fine
         string name = sh != null ? sh.name : "";
         Shader real;
+        if (name.Length > 0 && !game.ContainsKey(name))
+        {
+            // not loaded at startup (e.g. TextMeshPro, GUI/Text Shader): the build may still contain it
+            var f = Shader.Find(name);
+            if (f != null && !bundleIds.Contains(f.GetInstanceID()) && (sh == null || f.GetInstanceID() != sh.GetInstanceID())) { game[name] = f; gameIds.Add(f.GetInstanceID()); }
+        }
         if (name.Length > 0 && game.TryGetValue(name, out real) && real != null)
         {
             var keywords = mat.shaderKeywords; var queue = mat.renderQueue;
