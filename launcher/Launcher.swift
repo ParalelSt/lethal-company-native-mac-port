@@ -329,7 +329,7 @@ final class Launcher: NSObject, NSApplicationDelegate, NSCollectionViewDataSourc
         let buildCard = Card(); fill(vstack([label("BUILD / UPDATE GAME", size: 11, color: T.muted, weight: .semibold, wrap: false),
             label("Pick your \"Lethal Company\" folder from a Windows Steam install (Steam › Manage › Browse local files). The launcher checks Steam ownership, extracts the game, swaps the Windows-only parts, compiles the shaders for Metal and installs the app. About an hour the first time, much less afterwards. Run it again when the game updates.", size: 12.5),
             flat("Choose folder and build…", #selector(build), primary: true)], spacing: 10, insets: NSEdgeInsets(top: 14, left: 16, bottom: 14, right: 16)), in: buildCard)
-        let updBtns = vstack([flat("Check for game update", #selector(checkGame)), hstack([flat("How it works", #selector(howItWorks)), flat("Quit", #selector(quit))])], spacing: 8)
+        let updBtns = vstack([hstack([flat("Check for game update", #selector(checkGame)), flat("Add to Steam", #selector(addToSteam))]), hstack([flat("How it works", #selector(howItWorks)), flat("Quit", #selector(quit))])], spacing: 8)
         let upd = Card(); fill(vstack([label("UPDATES & HELP", size: 11, color: T.muted, weight: .semibold, wrap: false),
             label("The launcher checks for a newer launcher release when it starts. Game updates are detected against Steam's public build; when one ships, copy the new Windows folder over and run Build / Update again.", size: 12.5),
             updBtns], spacing: 10, insets: NSEdgeInsets(top: 14, left: 16, bottom: 14, right: 16)), in: upd)
@@ -473,7 +473,9 @@ final class Launcher: NSObject, NSApplicationDelegate, NSCollectionViewDataSourc
             gameV = "ready"; gameH = "built \(j["built"] as? String ?? "?") · Unity \(j["unity"] as? String ?? "?") · in ~/Applications"; gameC = T.ok
         } else if FileManager.default.fileExists(atPath: app.path) { gameV = "installed"; gameH = "~/Applications/Lethal Company.app"; gameC = T.ok }
         set("game", gameV, gameH, gameC)
-        let steam = isRunning("steam_osx"); set("steam", steam ? "running" : "not running", steam ? "signed-in account must own the game" : "started automatically when you play or build", steam ? T.ok : T.warn)
+        var shortcut = false
+        if let data = try? Data(contentsOf: support.appendingPathComponent("state.json")), let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let sc = j["steam_shortcuts"] as? [String: Any], !sc.isEmpty { shortcut = true }
+        let steam = isRunning("steam_osx"); set("steam", steam ? "running" : "not running", (shortcut ? "added as shortcut" : "not added") + " · " + (steam ? "signed-in account must own the game" : "started automatically when you play or build"), steam ? T.ok : T.warn)
         let editors = ((try? FileManager.default.contentsOfDirectory(atPath: "/Applications/Unity/Hub/Editor")) ?? []).filter { $0.hasPrefix("2022.3") }
         if !editors.isEmpty { set("unity", "ready", "editor \(editors.joined(separator: ", "))", T.ok) }
         else if FileManager.default.fileExists(atPath: "/Applications/Unity Hub.app") { set("unity", "hub only", "the editor is downloaded during the first build", T.warn) }
@@ -555,6 +557,11 @@ final class Launcher: NSObject, NSApplicationDelegate, NSCollectionViewDataSourc
         }
     }
     @objc func checkGame() { run(["check-update"]) }
+    @objc func addToSteam() {
+        run(["steam-shortcut"]) {  // keep the command's closing hint ("Restart Steam once ...") in the drawer bar instead of "Done"
+            if let last = self.log.string.split(separator: "\n").last(where: { let t = $0.trimmingCharacters(in: .whitespaces); return !t.isEmpty && !t.hasPrefix("(exited") }) { self.drawerLine.stringValue = String(last).trimmingCharacters(in: .whitespaces) }
+        }
+    }
     @objc func checkLauncher() { run(["self-update"]) }
     @objc func clearLog() { log.string = ""; activityLog.string = "" }
     @objc func quit() { NSApp.terminate(nil) }

@@ -52,4 +52,7 @@ def full_build(editor_app, proj, out_app, game_dir=None):
                 if not os.path.exists(src): continue
                 n = dotnetmeta.retarget(src, os.path.join(dst, name), "Facepunch.Steamworks.Win64", "Facepunch.Steamworks.Posix")
                 log(f"    {name}: original IL, {n} reference(s) retargeted")
+        with Step("restore the original network prefab hashes (Windows players reject a different NetworkConfig)"):
+            from . import net_hashes
+            net_hashes.fix_build(out_app, game_dir)
     return out_app

@@ -5,6 +5,16 @@ Format: [Keep a Changelog](https://keepachangelog.com). Versions follow the laun
 
 ## [Unreleased]
 
+### Added
+- Add to Steam: registers the native and modded apps as Steam shortcuts so Play launches through Steam and the real Steam overlay works (`steam-shortcut`, launcher button).
+- `net-fix` / `net-verify`: restore and check the original network prefab hashes in the installed app.
+
+### Changed
+- The modded app starts through a small native launcher instead of a shell script, so Steam's overlay reaches the game and the last chosen profile is used.
+
+### Fixed
+- Joining Windows hosts: the native build carried regenerated NetworkObject hashes, so Netcode rejected the client without a reason. Builds now restore the original hashes after the Unity build.
+
 ## [0.1.0] - 2026-10-25
 
 ### Added

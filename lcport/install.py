@@ -1,5 +1,5 @@
 """Install the built app into ~/Applications with the game's icon, plus the modded launcher."""
-import os, shutil, struct, io, glob, subprocess
+import os, shutil, struct, io, glob, json, subprocess
 from . import config, thirdparty
 from .util import run, log, Step
 
@@ -56,13 +56,49 @@ def install_app(built_app, game_dir):
         run(["codesign", "--force", "--deep", "--sign", "-", config.APP_DST], capture=True)
         run(["/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister", "-f", config.APP_DST], check=False, capture=True)
 
+MODDED_EXE = "launch"  # CFBundleExecutable of the modded bundle; also the Exe of the "Lethal Company (Modded)" Steam shortcut
+LAUNCHER_BIN = os.path.join(config.KIT, "prebuilt", "modded_launcher")  # built from native/modded_launcher.c
+MACHO_MAGIC = (b"\xca\xfe\xba\xbe", b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe")  # universal, 64-bit, 32-bit Mach-O
+
+def launcher_config():
+    """Contents/Resources/launcher.json of the modded bundle: where its native launcher finds the kit, the support folder,
+    the game bundle and BepInEx (libdoorstop.dylib). The launcher reads nothing else from the bundle."""
+    return {"kit": config.KIT, "support": config.SUPPORT, "app": config.APP_DST, "bepinex": os.path.join(config.WORK, "thirdparty", "bepinex")}
+
+def write_modded_launcher(app):
+    """The bundle's main executable is a copy of the native launcher, not a script: Steam starts it with its overlay in
+    DYLD_INSERT_LIBRARIES, and macOS strips DYLD_* from protected binaries like /bin/zsh and python, so a script would lose
+    the overlay before the game starts. The launcher sets LC_DIRECT_LAUNCH=1 itself (never back through steam://)."""
+    macos, res = os.path.join(app, "Contents", "MacOS"), os.path.join(app, "Contents", "Resources")
+    os.makedirs(macos, exist_ok=True); os.makedirs(res, exist_ok=True)
+    path = os.path.join(macos, MODDED_EXE); tmp = path + ".tmp"
+    shutil.copyfile(LAUNCHER_BIN, tmp); os.chmod(tmp, 0o755); os.replace(tmp, path)
+    cfg = os.path.join(res, "launcher.json")
+    with open(cfg + ".tmp", "w", encoding="utf-8") as f: json.dump(launcher_config(), f, indent=1, ensure_ascii=False)
+    os.replace(cfg + ".tmp", cfg)
+
+def modded_launcher_current(app):
+    """True if the bundle already runs the native launcher with today's launcher.json."""
+    try:
+        with open(os.path.join(app, "Contents", "MacOS", MODDED_EXE), "rb") as f: native = f.read(4) in MACHO_MAGIC
+        with open(os.path.join(app, "Contents", "Resources", "launcher.json"), encoding="utf-8") as f: cfg = json.load(f)
+    except (OSError, ValueError): return False
+    return native and cfg == launcher_config()
+
+def fix_modded_launcher(app=None):
+    """Bundles written by older versions start the game through a zsh script (which loses Steam's overlay), or carry
+    stale paths. Install the native launcher + launcher.json there and re-sign the bundle. Returns True if it changed."""
+    app = app or config.MODDED_DST
+    if not os.path.isfile(os.path.join(app, "Contents", "MacOS", MODDED_EXE)) or modded_launcher_current(app): return False
+    write_modded_launcher(app)
+    run(["codesign", "--force", "--deep", "--sign", "-", app], check=False, capture=True)
+    return True
+
 def install_modded_launcher():
     with Step(f"install {config.MODDED_DST}"):
         a = config.MODDED_DST; shutil.rmtree(a, ignore_errors=True)
         os.makedirs(os.path.join(a, "Contents", "MacOS")); os.makedirs(os.path.join(a, "Contents", "Resources"))
-        py = os.path.join(config.SUPPORT, "venv", "bin", "python")
-        open(os.path.join(a, "Contents", "MacOS", "launch"), "w").write(f'#!/bin/zsh\ncd "{config.KIT}" && exec "{py}" -m lcport play-modded "${{LC_PROFILE:-Default}}"\n')
-        os.chmod(os.path.join(a, "Contents", "MacOS", "launch"), 0o755)
+        write_modded_launcher(a)
         icns = os.path.join(config.APP_DST, "Contents", "Resources", "PlayerIcon.icns")
         if os.path.exists(icns): shutil.copy2(icns, os.path.join(a, "Contents", "Resources", "PlayerIcon.icns"))
         open(os.path.join(a, "Contents", "Info.plist"), "w").write(f'''<?xml version="1.0" encoding="UTF-8"?>
@@ -71,12 +107,13 @@ def install_modded_launcher():
   <key>CFBundleName</key><string>{config.APP_NAME} Modded</string>
   <key>CFBundleDisplayName</key><string>{config.APP_NAME} Modded</string>
   <key>CFBundleIdentifier</key><string>com.lethalcompanymac.modded</string>
-  <key>CFBundleExecutable</key><string>launch</string>
+  <key>CFBundleExecutable</key><string>{MODDED_EXE}</string>
   <key>CFBundleIconFile</key><string>PlayerIcon.icns</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleVersion</key><string>1</string>
   <key>LSMinimumSystemVersion</key><string>12.0</string>
   <key>NSMicrophoneUsageDescription</key><string>Lethal Company uses the microphone for in-game voice chat.</string>
 </dict></plist>''')
+        run(["xattr", "-dr", "com.apple.quarantine", a], check=False, capture=True)
         run(["codesign", "--force", "--deep", "--sign", "-", a], capture=True)
         run(["/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister", "-f", a], check=False, capture=True)

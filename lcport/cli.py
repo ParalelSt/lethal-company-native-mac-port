@@ -1,4 +1,4 @@
-"""Command line + simple dialog-driven menu. Commands: setup, build <game folder>, play, play-modded [profile], mods ..., check-update, self-update, version, menu"""
+"""Command line + simple dialog-driven menu. Commands: setup, build <game folder>, play, play-modded [profile], mods ..., check-update, self-update, steam-shortcut [--remove] (alias add-to-steam), version, net-fix (restore the original network prefab hashes in the installed app, needed to join Windows hosts), net-verify (check those hashes), menu"""
 import os, sys, subprocess, time, shutil, glob, json
 from . import config
 
@@ -84,11 +84,15 @@ def record_game_shaders():
 def cmd_play(args, modded=False):
     from . import steam, thirdparty
     if not os.path.exists(config.APP_DST): raise SystemExit("Lethal Company is not built yet. Run: build <game folder>")
+    from .util import read_state, write_state
     steam.ensure_running()
     env = {}; extra = []
     if modded:
         from .mods import profile_dir
-        pname = args[0] if args else "Default"
+        st = read_state()
+        # no profile given: use the profile last chosen in the launcher (the modded bundle's native launcher does the same)
+        pname = args[0] if args else st.get("modded_profile", "Default")
+        if st.get("modded_profile") != pname: st["modded_profile"] = pname; write_state(st)
         bep = profile_dir(pname)
         try: n = len([f for f in os.listdir(os.path.join(bep, "plugins")) if f != "MacShaderFix" and not f.startswith(".")])
         except OSError: n = 0
@@ -97,10 +101,51 @@ def cmd_play(args, modded=False):
                "DOORSTOP_IGNORE_DISABLED_ENV": "0", "DYLD_INSERT_LIBRARIES": os.path.join(thirdparty.bepinex(), "libdoorstop.dylib")}
     if not modded: print("Launching Lethal Company (vanilla)", flush=True)
     logfile = os.path.join(config.WORK, "player-modded.log" if modded else "player.log")
-    p = steam.launch(config.APP_DST, extra, env, logfile=logfile)
+    p = steam.launch(config.APP_DST, extra, env, logfile=logfile, shortcut_app=config.MODDED_DST if modded else None)
+    if p is None:
+        print(f"Launched through Steam (overlay by Steam). Game log: {logfile}", flush=True); return
     print(f"Game running (pid {p.pid}), log: {logfile}", flush=True)
     code = p.wait()
     print(f"Game closed (exit {code})", flush=True)
+
+VANILLA_SHORTCUT = "Lethal Company"
+MODDED_SHORTCUT = "Lethal Company (Modded)"
+
+def cmd_steam_shortcut(args):
+    """Register the native app (and the modded launcher) as non-Steam games so Steam starts them and draws its overlay."""
+    from . import steam, steam_shortcuts as sc, install
+    from .util import read_state, write_state
+    acct = steam.current_account_id()
+    if not acct: raise SystemExit("Could not tell which Steam account is signed in on this Mac. Sign in to Steam once, then try again.")
+    path = steam.shortcuts_path(acct)
+    entries = sc.load(path)
+    st = read_state()
+    if "--remove" in args:
+        kept = sc.remove(sc.remove(entries, VANILLA_SHORTCUT), MODDED_SHORTCUT)
+        if len(kept) != len(entries): sc.save(path, kept)
+        st.pop("steam_shortcuts", None); write_state(st)
+        print(f"Removed {len(entries) - len(kept)} Lethal Company shortcut(s) from Steam.")
+        print("Restart Steam once so it picks up the change.")
+        return
+    if not os.path.exists(config.APP_DST): raise SystemExit("Lethal Company is not built yet. Run: build <game folder>")
+    now = int(time.time()); recs = {}
+    def add(key, name, app, launch_options=""):
+        exe = steam.app_executable(app); icns = os.path.join(app, "Contents", "Resources", "PlayerIcon.icns")
+        e = sc.upsert(entries, name, exe, os.path.dirname(exe), icon=icns if os.path.exists(icns) else "", launch_options=launch_options)
+        recs[key] = {"appid": e["appid"], "rungameid": sc.rungameid(e["appid"]), "exe": exe, "added": now}
+    vlog = os.path.join(config.WORK, "player.log")
+    add("vanilla", VANILLA_SHORTCUT, config.APP_DST, launch_options=f'-logFile "{vlog}"')
+    if os.path.exists(config.MODDED_DST):
+        if install.fix_modded_launcher(): print(f"Updated the launcher in {config.MODDED_DST} (it now starts the game itself, so Steam's overlay reaches it).")
+        add("modded", MODDED_SHORTCUT, config.MODDED_DST)
+    else:
+        entries[:] = sc.remove(entries, MODDED_SHORTCUT)
+        print(f"{config.MODDED_DST} is missing, so only the vanilla shortcut was added (run build to create it).")
+    sc.save(path, entries)
+    st["steam_shortcuts"] = recs; write_state(st)
+    for key, name in (("vanilla", VANILLA_SHORTCUT), ("modded", MODDED_SHORTCUT)):
+        if key in recs: print(f"{name}: steam://rungameid/{recs[key]['rungameid']}")
+    print("Restart Steam once so it picks up the new shortcuts.")
 
 def ask_game_dir():
     from .util import ask_folder
@@ -146,6 +191,9 @@ def main():
             u = selfupdate.available(); print("already up to date" if not u else "updating...") ; u and selfupdate.apply(u)
         elif cmd == "check-update":
             from . import check_update; sys.exit(check_update.check(notify="--notify" in a, accept="--accept" in a))
+        elif cmd in ("steam-shortcut", "add-to-steam"): cmd_steam_shortcut(a[1:])
+        elif cmd == "net-fix": from . import net_hashes; net_hashes.main(["fix", str(config.APP_DST)] + a[1:])
+        elif cmd == "net-verify": from . import net_hashes; net_hashes.main(["verify", str(config.APP_DST)] + a[1:])
         elif cmd == "menu": cmd_menu(a[1:])
         else: print(__doc__)
     except KeyboardInterrupt: pass

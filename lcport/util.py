@@ -56,10 +56,12 @@ def extract(archive, dest, strip=0):
     return dest
 
 def read_state():
-    return json.load(open(config.STATE)) if os.path.exists(config.STATE) else {}
+    if not os.path.exists(config.STATE): return {}
+    with open(config.STATE) as f: return json.load(f)
 
 def write_state(d):
-    os.makedirs(config.SUPPORT, exist_ok=True); json.dump(d, open(config.STATE, "w"), indent=1)
+    os.makedirs(config.SUPPORT, exist_ok=True)
+    with open(config.STATE, "w") as f: json.dump(d, f, indent=1)
 
 def notify(title, text):
     subprocess.run(["osascript", "-e", f'display notification "{text}" with title "{title}"'], check=False)

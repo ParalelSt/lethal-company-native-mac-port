@@ -3,6 +3,8 @@
 # Users never run this; the results are committed under prebuilt/.
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"; OUT="$HERE/../prebuilt"; TMP="$(mktemp -d)"
+# main executable of "Lethal Company Modded.app" (native, so Steam's DYLD_INSERT_LIBRARIES overlay survives); needs only clang
+clang -O2 -Wall -arch arm64 -arch x86_64 -o "$OUT/modded_launcher" "$HERE/modded_launcher.c" && codesign --force --sign - "$OUT/modded_launcher"
 FP_UNI="${FP_UNI:?path to Facepunch.Steamworks 2.5.x Unity folder (redistributable_bin/osx/libsteam_api.dylib)}"
 SDK="${SDK:?path to Facepunch 2.3.2 Generator/steam_sdk}"; mkdir -p "$TMP/include"; ln -s "$SDK" "$TMP/include/steam"
 clang -O2 -arch arm64 -dynamiclib -fvisibility=hidden -I/opt/homebrew/opt/opus/include -o "$OUT/libopus.dylib" "$HERE/opus_shim.c" /opt/homebrew/opt/opus/lib/libopus.a -Wl,-install_name,@rpath/libopus.dylib -Wl,-exported_symbols_list,"$HERE/opus_exports.txt"
