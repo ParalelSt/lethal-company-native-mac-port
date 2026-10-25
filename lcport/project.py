@@ -186,6 +186,12 @@ def assemble(proj, game_dir, editor_app, natives_dir):
         ps = os.path.join(proj, "ProjectSettings", "ProjectSettings.asset"); s = open(ps).read()
         s = re.sub(r"^  microphoneUsageDescription: *$", "  microphoneUsageDescription: Lethal Company uses the microphone for in-game voice chat.", s, flags=re.M)
         open(ps, "w").write(s)
+        # built-in shaders that mods commonly use but the HDRP game never references; include them so Shader.Find works at runtime
+        gs = os.path.join(proj, "ProjectSettings", "GraphicsSettings.asset"); g = open(gs).read()
+        for fid in (10101, 10752):  # GUI/Text Shader, Unlit/Texture
+            line = f"  - {{fileID: {fid}, guid: 0000000000000000f000000000000000, type: 0}}\n"
+            if line not in g: g = g.replace("  m_AlwaysIncludedShaders:\n", "  m_AlwaysIncludedShaders:\n" + line, 1)
+        open(gs, "w").write(g)
         ed = os.path.join(proj, "Assets", "Editor", "PortTools"); os.makedirs(ed, exist_ok=True)
         for f in glob.glob(os.path.join(config.KIT, "unity", "Editor", "PortTools", "*.cs")): shutil.copy2(f, ed)
     return pkgs
