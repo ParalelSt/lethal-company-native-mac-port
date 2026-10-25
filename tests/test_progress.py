@@ -7,7 +7,7 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try: import dnfile  # noqa: F401  (kit venv only; lcport.mods imports it)
 except ImportError: sys.modules["dnfile"] = types.ModuleType("dnfile")
-from lcport import config, util, unity, cli, mods, steam, install, thirdparty, rip, dotnetmeta, net_hashes, check_update
+from lcport import config, util, unity, cli, mods, steam, install, thirdparty, rip, dotnetmeta, net_hashes, check_update, deps
 from lcport.util import Step, progress_steps
 
 def write(path, data):
@@ -87,7 +87,8 @@ class BuildProgressTest(unittest.TestCase):
                         mock.patch.object(rip, "export", lambda *a: os.path.join(work, "rip")), mock.patch.object(dotnetmeta, "retarget", lambda *a: 0),
                         mock.patch.object(net_hashes, "fix_build", lambda *a: None), mock.patch.object(install, "install_app", fake_install_app),
                         mock.patch.object(install, "install_modded_launcher", fake_install_modded), mock.patch.object(cli, "record_game_shaders", lambda: None),
-                        mock.patch.object(check_update, "check", lambda **k: 0)]
+                        mock.patch.object(check_update, "check", lambda **k: 0), mock.patch.object(deps, "ensure_venv", lambda: "/fake/python"),
+                        mock.patch.object(deps, "hub_path", lambda: "/fake/Unity Hub.app"), mock.patch.object(deps, "ensure_unity_signed_in", lambda: True)]
         for p in self.patches: p.start()
     def tearDown(self):
         for p in self.patches: p.stop()
@@ -100,7 +101,7 @@ class BuildProgressTest(unittest.TestCase):
         self.assertEqual(numbered, statuses)  # every status carries the step count
         tops = sorted({int(s.rsplit("(", 1)[1].split("/")[0]) for s in statuses})
         self.assertEqual(tops, list(range(1, cli.BUILD_STEPS + 1)))  # BUILD_STEPS matches the real number of steps
-        self.assertIn("Compiling shaders and building the app (30-60 min) (9/14)", statuses)
+        self.assertIn("Compiling shaders and building the app (30-60 min) (12/17)", statuses)
         pcts = [int(p) for p in control(lines, "progress")]
         self.assertEqual(pcts, sorted(pcts)); self.assertEqual(pcts[-1], 100)
         self.assertEqual(control(lines)[-1], ("done", "Build finished. Lethal Company is in your Applications folder"))

@@ -8,7 +8,7 @@ The repository contains **no game files**. You bring the game; the launcher turn
 ## You need
 - A Mac with Apple silicon and about 25 GB free during the build.
 - Steam installed and signed in to an account that owns Lethal Company (the launcher checks).
-- Unity Hub installed and signed in once (free Personal licence). The launcher installs the exact editor version itself.
+- A free Unity account (unity.com). The launcher installs Unity Hub and the editor itself and asks you to sign in once.
 - The `Lethal Company` folder from a Windows Steam install, copied to the Mac (see Getting the Windows copy below).
 
 ## Do
@@ -48,13 +48,14 @@ The launcher only reads that folder; it never changes it. You can delete it afte
 
 ## What happens during a build
 1. Steam confirms the signed-in account owns the game.
-2. AssetRipper extracts the game's scenes, assets and code into a Unity project.
-3. Windows-only pieces are replaced: Unity packages are restored from the real registry, Steamworks gets a Mac
+2. Unity Hub and the exact editor version are installed if missing; you sign in to Unity once.
+3. AssetRipper extracts the game's scenes, assets and code into a Unity project.
+4. Windows-only pieces are replaced: Unity packages are restored from the real registry, Steamworks gets a Mac
    compatibility layer, voice and Opus audio get Mac plugins, and a few effects whose shader sources do not survive a
    compiled build get hand-written replacements.
-4. Unity compiles every shader for Metal and builds the app.
-5. The game's original code assemblies are placed back into the app so mods see exactly the code they were written for.
-6. The app is installed into Applications with the game's icon, together with a **Lethal Company Modded** launcher.
+5. Unity compiles every shader for Metal and builds the app.
+6. The game's original code assemblies are placed back into the app so mods see exactly the code they were written for.
+7. The app is installed into Applications with the game's icon, together with a **Lethal Company Modded** launcher.
 
 ## Mods
 The launcher's Mods tab browses Thunderstore, installs and removes mods with one click, shows which ones work on the Mac, and keeps profiles. The same from a terminal: `python3 -m lcport mods import <profile> <thunderstore-profile-code>` installs a mod list; `mods install`, `mods search`,

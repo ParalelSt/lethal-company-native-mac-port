@@ -60,7 +60,15 @@ def md5(path):
         for chunk in iter(lambda: f.read(1 << 20), b""): h.update(chunk)
     return h.hexdigest()
 
-def download(url, name=None, force=False):
+def step_progress(frac):
+    """##progress for a fraction (0-1) of the current top-level Step inside progress_steps, else 0-100 on its own."""
+    frac = max(0.0, min(1.0, frac)); sc = _scope
+    if sc is None or sc["index"] == 0: progress(frac * 100)
+    else: progress((sc["index"] - 1 + frac) * 100 / sc["total"])
+
+def download(url, name=None, force=False, show_progress=False):
+    """Fetch url into config.CACHE (kept between runs). show_progress: ##progress lines as the bytes arrive (needs a
+    Content-Length), scaled into the current Step's share of the bar."""
     os.makedirs(config.CACHE, exist_ok=True)
     name = name or url.rsplit("/", 1)[-1]
     p = os.path.join(config.CACHE, name)
@@ -68,7 +76,16 @@ def download(url, name=None, force=False):
     log(f"    downloading {url}")
     req = urllib.request.Request(url, headers={"User-Agent": "lcport"})
     with urllib.request.urlopen(req, timeout=120) as r, open(p + ".part", "wb") as f:
-        shutil.copyfileobj(r, f)
+        if not show_progress: shutil.copyfileobj(r, f)
+        else:
+            try: total = int(r.headers.get("Content-Length") or 0)
+            except (TypeError, ValueError): total = 0
+            got, last = 0, None
+            while True:
+                chunk = r.read(1 << 20)
+                if not chunk: break
+                f.write(chunk); got += len(chunk)
+                if total and int(got * 100 / total) != last: last = int(got * 100 / total); step_progress(got / total)
     os.replace(p + ".part", p); return p
 
 def http_json(url):

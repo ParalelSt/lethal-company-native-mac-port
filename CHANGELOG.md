@@ -6,6 +6,7 @@ Format: [Keep a Changelog](https://keepachangelog.com). Versions follow the laun
 ## [Unreleased]
 
 ### Added
+- Unity setup without manual steps: Build (and `setup`) installs Unity Hub from Unity's official disk image, opens it for a one-time sign-in and waits for the licence, then installs the editor. `check-unity` reports Hub, sign-in and editor for the Home status grid.
 - Add to Steam: registers the native and modded apps as Steam shortcuts so Play launches through Steam and the real Steam overlay works (`steam-shortcut`, launcher button).
 - `net-fix` / `net-verify`: restore and check the original network prefab hashes in the installed app.
 - Progress in the launcher: a plain-language status line and a progress bar for builds, mod installs and launches (the kit prints `##status` / `##progress` / `##done` / `##fail` lines).

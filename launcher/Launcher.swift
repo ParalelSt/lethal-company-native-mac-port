@@ -309,6 +309,7 @@ final class Launcher: NSObject, NSApplicationDelegate, NSCollectionViewDataSourc
     var process: Process?
     var allResults: [[String: Any]] = [], results: [[String: Any]] = [], installed: [String: String] = [:], audit: [String: [String: Any]] = [:], category = "All"
     var searchTimer: Timer?, searchSeq = 0, snapshotSelect = false, snapshotPending = false, snapshotSheetPath: String?
+    var unityInfo: [String: Any]?, unityCheckedAt: Date?  // last "check-unity" answer: {"hub", "signed_in", "editor"}; asked at most every 30 s
 
     override init() { kit = Bundle.main.bundleURL.deletingLastPathComponent(); super.init() }
 
@@ -476,7 +477,7 @@ final class Launcher: NSObject, NSApplicationDelegate, NSCollectionViewDataSourc
         for r in gridRows { r.distribution = .fillEqually; r.alignment = .top; r.widthAnchor.constraint(equalTo: statusStack.widthAnchor, constant: -32).isActive = true }
         // action cards
         let buildCard = Card(); fill(vstack([label("BUILD / UPDATE GAME", size: 11, color: T.muted, weight: .semibold, wrap: false),
-            label("Pick your \"Lethal Company\" folder from a Windows Steam install (Steam › Manage › Browse local files). The launcher checks Steam ownership, extracts the game, swaps the Windows-only parts, compiles the shaders for Metal and installs the app. About an hour the first time, much less afterwards. Run it again when the game updates.", size: 12.5),
+            label("Pick your Lethal Company folder from a Windows Steam install. The launcher installs Unity Hub and the exact editor version itself; you sign in to Unity once with a free account. About an hour the first time, much less afterwards. Run it again when the game updates.", size: 12.5),
             flat("Choose folder and build…", #selector(build), primary: true)], spacing: 10, insets: NSEdgeInsets(top: 14, left: 16, bottom: 14, right: 16)), in: buildCard)
         let updBtns = vstack([hstack([flat("Check for game update", #selector(checkGame)), flat("Add to Steam", #selector(addToSteam))]), hstack([flat("How it works", #selector(howItWorks)), flat("Quit", #selector(quit))])], spacing: 8)
         let upd = Card(); fill(vstack([label("UPDATES & HELP", size: 11, color: T.muted, weight: .semibold, wrap: false),
@@ -728,10 +729,20 @@ final class Launcher: NSObject, NSApplicationDelegate, NSCollectionViewDataSourc
         if let data = try? Data(contentsOf: support.appendingPathComponent("state.json")), let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let sc = j["steam_shortcuts"] as? [String: Any], !sc.isEmpty { shortcut = true }
         let steam = isRunning("steam_osx"); set("steam", steam ? "running" : "not running", (shortcut ? "added as shortcut" : "not added") + " · " + (steam ? "signed-in account must own the game" : "started automatically when you play or build"), steam ? T.ok : T.warn,
                                               short: steam ? (shortcut ? "shortcut added" : "no shortcut yet") : "opens when you play")
-        let editors = ((try? FileManager.default.contentsOfDirectory(atPath: "/Applications/Unity/Hub/Editor")) ?? []).filter { $0.hasPrefix("2022.3") }.sorted()
-        if !editors.isEmpty { set("unity", "ready", "editor \(editors.joined(separator: ", "))", T.ok, short: editors.last! + (editors.count > 1 ? " +\(editors.count - 1)" : "")) }
-        else if FileManager.default.fileExists(atPath: "/Applications/Unity Hub.app") { set("unity", "hub only", "the editor is downloaded during the first build", T.warn, short: "editor comes with build") }
-        else { set("unity", "missing", "install Unity Hub from unity.com and sign in once", T.bad, short: "install Unity Hub") }
+        if unityCheckedAt == nil || Date().timeIntervalSince(unityCheckedAt!) >= 30 {
+            unityCheckedAt = Date()
+            kitJSON(["check-unity"]) { obj in if let d = obj as? [String: Any] { self.unityInfo = d; self.refreshStatus() } }
+        }
+        if let u = unityInfo {
+            let signedIn = u["signed_in"] as? Bool ?? false, signTip = signedIn ? "" : " · not signed in: Build opens Unity Hub so you can sign in once"
+            if let editor = u["editor"] as? String {
+                let ver = URL(fileURLWithPath: editor).deletingLastPathComponent().lastPathComponent
+                set("unity", "ready", "editor \(ver) at \(editor)" + signTip, T.ok, short: ver)
+            } else if u["hub"] as? String != nil {
+                if signedIn { set("unity", "hub ready", "signed in · Build installs the editor through Unity Hub", T.ok, short: "editor installs with Build") }
+                else { set("unity", "hub ready", "Unity Hub is installed but has no licence: Build opens it, you sign in once with a free account", T.warn, short: "sign in needed") }
+            } else { set("unity", "installs with Build", "Build installs Unity Hub and the editor; you sign in to Unity once with a free account", T.muted, short: "") }
+        } else { set("unity", "checking…", "Checking Unity Hub, the Unity sign-in and the editor", T.muted, short: "") }
         let upd = !launcherChecked ? ("checking…", "Checking GitHub for a newer launcher release")
             : launcherUpdate == nil ? (launcherNoRelease ? ("no release published", "No launcher release is published on GitHub yet") : ("update check failed", "Could not reach GitHub to check for a newer launcher"))
             : launcherUpdate! ? ("update available", "A newer launcher is out: use Check for launcher update") : ("up to date", "This is the newest launcher release")

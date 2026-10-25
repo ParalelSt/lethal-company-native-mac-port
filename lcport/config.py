@@ -18,5 +18,5 @@ FACEPUNCH_UNIVERSAL_TAG = "2.5.2"  # provides a universal (x86_64+arm64) libstea
 ASSETRIPPER_TAG = "2.0.0"
 BEPINEX_TAG = "5.4.23.6"
 DISCORD_SDK = "3.2.1"
-UNITY_HUB = "/Applications/Unity Hub.app/Contents/MacOS/Unity Hub"
+UNITY_VERSION = "2022.3.62f2"   # the game's Unity version; setup and check-unity use it until a build records the real one
 UNITY_EDITORS = "/Applications/Unity/Hub/Editor"

@@ -1,4 +1,4 @@
-"""Command line + simple dialog-driven menu. Commands: setup, build <game folder>, play, play-modded [profile], mods ..., check-update, self-update, steam-shortcut [--remove] (alias add-to-steam), version, net-fix (restore the original network prefab hashes in the installed app, needed to join Windows hosts), net-verify (check those hashes), menu"""
+"""Command line + simple dialog-driven menu. Commands: setup, build <game folder>, play, play-modded [profile], mods ..., check-update, check-unity (one JSON line: Unity Hub, sign-in, editor), self-update, steam-shortcut [--remove] (alias add-to-steam), version, net-fix (restore the original network prefab hashes in the installed app, needed to join Windows hosts), net-verify (check those hashes), menu"""
 import os, sys, subprocess, time, shutil, glob, json
 from . import config
 
@@ -26,15 +26,50 @@ def validate_game_dir(d):
     return d
 
 def cmd_setup(args):
-    from . import deps, unity
-    from .util import log
+    from . import deps
+    from .util import log, progress_steps, done
     log("checking requirements...")
     missing = deps.check_tools()
     for m in missing: log("  missing: " + m)
-    if not os.path.exists(config.UNITY_HUB): log("  missing: Unity Hub (https://unity.com/download) - install it and sign in once")
-    log("ok" if not missing else "fix the items above, then run again")
+    if missing: raise SystemExit("Fix the items above, then run setup again.")
+    ver = unity_version()
+    with progress_steps(UNITY_STEPS): ensure_unity(ver)
+    done(f"Unity {ver} is ready")
 
-BUILD_STEPS = 14  # top-level Steps in cmd_build: 4 here, unity.full_build's 7, 2 installs, the shader record
+UNITY_STEPS = 4   # top-level Steps in ensure_unity
+BUILD_STEPS = 17  # top-level Steps in cmd_build: Steam check, ensure_unity's 4, extract, assemble, unity.full_build's 7, 2 installs, the shader record
+
+def unity_version():
+    """The game's Unity version: the one the last build recorded, else the version this port targets."""
+    from .util import read_state
+    return read_state().get("unity") or config.UNITY_VERSION
+
+def ensure_unity(ver):
+    """Python packages, Unity Hub, the Unity sign-in, then the editor (UNITY_STEPS top-level Steps). Returns the editor app."""
+    from . import deps, unity
+    from .util import log, Step
+    with Step("Python packages", status="Checking the Python packages"):
+        deps.ensure_venv()
+    with Step("Unity Hub", status="Checking Unity Hub"):
+        hub = deps.hub_path()
+        if not hub:
+            log("    not installed; installing it from Unity's official download")
+            hub = deps.install_hub()
+        log(f"    {hub}")
+    with Step("Unity sign-in", status="Checking the Unity sign-in"):
+        deps.ensure_unity_signed_in()
+    with Step(f"Unity {ver}", status=f"Checking Unity {ver}"):
+        app = unity.editor_for(ver)
+        if not app:
+            log("    not installed; installing through Unity Hub")
+            deps.install_unity(ver); app = unity.editor_for(ver)
+            if not app: raise SystemExit(f"Unity {ver} is still missing. Open Unity Hub, sign in, install Unity {ver} (Apple silicon), then rerun.")
+    return app
+
+def unity_report():
+    """For the launcher's status grid: {"hub": app path or None, "signed_in": bool, "editor": Unity.app path or None}."""
+    from . import deps, unity
+    return {"hub": deps.hub_path(), "signed_in": deps.unity_signed_in(), "editor": unity.editor_for(unity_version())}
 
 def cmd_build(args):
     from .util import progress_steps, done
@@ -52,12 +87,7 @@ def _build(game):
         if owns is None: raise SystemExit("Could not talk to Steam. Make sure you are signed in.")
         if not owns: raise SystemExit("The signed-in Steam account does not own Lethal Company. This port only works with a purchased copy.")
     ver = unity.game_unity_version(game); log(f"    game Unity version: {ver}")
-    with Step(f"Unity {ver}", status=f"Checking Unity {ver}"):
-        app = unity.editor_for(ver)
-        if not app:
-            log("    not installed; installing through Unity Hub (sign in to the Hub if it asks)")
-            deps.install_unity(ver); app = unity.editor_for(ver)
-            if not app: raise SystemExit(f"Unity {ver} is still missing. Open Unity Hub, sign in, install Unity {ver} (Apple silicon), then rerun.")
+    app = ensure_unity(ver)
     with Step("extract assets from your game copy (AssetRipper)", status="Extracting your game files"):
         proj = rip.export(game, os.path.join(config.WORK, "rip"))
     marker = os.path.join(config.WORK, "rip", ".assembled")
@@ -211,6 +241,7 @@ def main():
                 print(json.dumps({"current": __version__, "latest": l and l["version"], "state": state,
                                   "available": bool(l and l["url"] and selfupdate.vtuple(l["version"]) > selfupdate.vtuple(__version__))})); return
             u = selfupdate.available(); print("already up to date" if not u else "updating...") ; u and selfupdate.apply(u)
+        elif cmd == "check-unity": print(json.dumps(unity_report()))
         elif cmd == "check-update":
             from . import check_update; sys.exit(check_update.check(notify="--notify" in a, accept="--accept" in a))
         elif cmd in ("steam-shortcut", "add-to-steam"): cmd_steam_shortcut(a[1:])
