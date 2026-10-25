@@ -108,7 +108,8 @@ def assemble(proj, game_dir, editor_app, natives_dir):
     with Step("enable the game's precompiled assemblies for the Editor (AssetRipper disables them)"):
         for meta in glob.glob(os.path.join(plugins, "*.dll.meta")):
             if meta.endswith("Facepunch.Steamworks.Posix.dll.meta"): continue
-            open(meta, "w").write(PLUGIN_META % _guid(meta))
+            g = _guid(meta)  # read before truncating
+            with open(meta, "w") as f: f.write(PLUGIN_META % g)
     with Step("Steamworks: Posix assembly, facade, retarget game assemblies"):
         for f in ("Facepunch.Steamworks.Win64.dll", "Facepunch.Steamworks.Win64.dll.meta", "Facepunch.Steamworks.Win32.dll", "Facepunch.Steamworks.Win32.dll.meta"):
             p = os.path.join(plugins, f)
