@@ -5,7 +5,7 @@ from . import config
 def bootstrap():
     """Re-exec inside the kit's venv (created on first run) so UnityPy/pefile/dnfile are available."""
     venv_py = os.path.join(config.SUPPORT, "venv", "bin", "python")
-    if os.path.realpath(sys.executable) == os.path.realpath(venv_py):
+    if os.path.realpath(sys.prefix) == os.path.realpath(os.path.join(config.SUPPORT, "venv")):
         try: import dnfile, UnityPy, pefile, PIL, vdf  # noqa
         except ImportError:
             subprocess.run([venv_py, "-m", "pip", "install", "-q", "--disable-pip-version-check", "UnityPy", "pefile", "pillow", "vdf", "dnfile"], check=True)
