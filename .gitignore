@@ -5,3 +5,4 @@ tools/*/bin/
 tools/*/obj/
 tools/*/out/
 .DS_Store
+.router/
