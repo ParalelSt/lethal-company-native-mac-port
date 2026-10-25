@@ -6,3 +6,8 @@ tools/*/obj/
 tools/*/out/
 .DS_Store
 .router/
+Lethal Company Port.app/Contents/MacOS/
+Lethal Company Port.app/Contents/_CodeSignature/
+*.orig
+*.png
+snaprepo/
