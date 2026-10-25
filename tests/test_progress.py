@@ -164,7 +164,7 @@ class ModsProgressTest(unittest.TestCase):
         os.makedirs(os.path.join(t, "profiles", "P"))
         self.patches = [mock.patch.object(config, "CACHE", t), mock.patch.object(config, "PROFILES", os.path.join(t, "profiles")),
                         mock.patch.object(mods, "index", lambda: FAKE_INDEX), mock.patch.object(mods, "profile_dir", lambda p: t),
-                        mock.patch.object(mods, "download", lambda v: "unused.zip"), mock.patch.object(mods, "extract_mod", lambda *a: None)]
+                        mock.patch.object(mods, "download", lambda v, span=None: "unused.zip"), mock.patch.object(mods, "extract_mod", lambda *a: None)]
         for p in self.patches: p.start()
     def tearDown(self):
         for p in self.patches: p.stop()
@@ -173,7 +173,9 @@ class ModsProgressTest(unittest.TestCase):
     def test_install_reports_each_mod_and_progress(self):
         with mock.patch.object(mods, "audit", lambda prof, save=True: util.status("checking the mods for Mac compatibility")):
             lines = capture(mods.main, ["install", "P", "notnotnotswipez-MoreCompany", "Owner-Other"])
-        self.assertEqual(control(lines, "status"), ["installing MoreCompany 1.14.0", "installing Other 2.0.0", "installing BepInExPack 5.4.2100",
+        self.assertEqual(control(lines, "status"), ["Downloading MoreCompany 1.14.0 (1 of 2)", "Installing MoreCompany 1.14.0 (1 of 2)",
+                                                    "Downloading Other 2.0.0 (2 of 3)", "Installing Other 2.0.0 (2 of 3)",
+                                                    "Downloading BepInExPack 5.4.2100 (3 of 3)", "Installing BepInExPack 5.4.2100 (3 of 3)",
                                                     "checking the mods for Mac compatibility"])
         pcts = [int(p) for p in control(lines, "progress")]
         self.assertEqual(pcts, sorted(pcts)); self.assertEqual(pcts[0], 0); self.assertEqual(pcts[-1], 90)
@@ -185,7 +187,7 @@ class ModsProgressTest(unittest.TestCase):
         with mock.patch.object(mods, "remove", lambda prof, name: removed.append(name)), mock.patch.object(mods, "audit", lambda prof, save=True: None):
             lines = capture(mods.main, ["apply", "P", "--install", "Owner-Other", "--remove", "A-One", "B-Two"])
         self.assertEqual(removed, ["A-One", "B-Two"])
-        self.assertEqual(control(lines, "status"), ["removing One", "removing Two", "installing Other 2.0.0"])
+        self.assertEqual(control(lines, "status"), ["removing One", "removing Two", "Downloading Other 2.0.0 (1 of 1)", "Installing Other 2.0.0 (1 of 1)"])
         pcts = [int(p) for p in control(lines, "progress")]
         self.assertEqual(pcts, sorted(pcts)); self.assertEqual(pcts[:2], [0, 30]); self.assertEqual(pcts[-1], 90)
         self.assertEqual(control(lines)[-1], ("done", "Changes applied"))

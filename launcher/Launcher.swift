@@ -46,7 +46,9 @@ final class FlatButton: NSButton {
     func refresh() {
         layer?.backgroundColor = (isEnabled ? fill : fill.withAlphaComponent(0.4)).cgColor
         let p = NSMutableParagraphStyle(); p.alignment = .center
-        attributedTitle = NSAttributedString(string: title, attributes: [.foregroundColor: isEnabled ? textColor : textColor.withAlphaComponent(0.6), .font: font!, .paragraphStyle: p])
+        let t = NSMutableAttributedString(string: title, attributes: [.foregroundColor: isEnabled ? textColor : textColor.withAlphaComponent(0.6), .font: font!, .paragraphStyle: p])
+        if title.hasSuffix("▾") { t.addAttribute(.foregroundColor, value: T.muted, range: NSRange(location: (title as NSString).length - 1, length: 1)) }  // dropdown chevron
+        attributedTitle = t
     }
     override var isEnabled: Bool { didSet { refresh() } }
     override var intrinsicContentSize: NSSize { var s = super.intrinsicContentSize; s.width += padding * 2; return s }
@@ -242,10 +244,10 @@ final class Launcher: NSObject, NSApplicationDelegate, NSCollectionViewDataSourc
     var pages: [String: NSView] = [:], navRows: [String: NavRow] = [:], current = "home"
     var heroSub = NSTextField(labelWithString: ""), statusRows: [String: (NSTextField, NSTextField)] = [:], statusCells: [String: NSView] = [:]
     var modeSwitch: SegSwitch!, playButton: FlatButton!, launcherUpdate: Bool?, launcherChecked = false, launcherNoRelease = false
-    var profilesHome = NSPopUpButton(), profiles = NSPopUpButton(), search = NSSearchField()  // `profiles` is hidden: the Mods page's chips select into it
+    var profilesHome: FlatButton!, profiles = NSPopUpButton(), search = NSSearchField()  // `profiles` is hidden: the Mods page's chips select into it
     var profileRow = ChipRow(height: 26, spacing: 8), chipRow = ChipRow(height: 24), modCount = NSTextField(labelWithString: ""), profileSig = ""
     var grid: NSCollectionView!, gridScroll: NSScrollView!, gridToEdge: NSLayoutConstraint!, gridToPanel: NSLayoutConstraint!, bodyToPage: NSLayoutConstraint!, bodyToBar: NSLayoutConstraint!
-    var applyBar: NSView!, applyLabel = NSTextField(labelWithString: ""), pendingInstall = Set<String>(), pendingRemove = Set<String>()
+    var applyBar: NSView!, applyProg: NSProgressIndicator!, modsBusy = false, applyLabel = NSTextField(labelWithString: ""), pendingInstall = Set<String>(), pendingRemove = Set<String>()
     var panel: NSView!, pAction: FlatButton!, pIcon = roundedIcon(56), pIconKey = "", selectedMod: String?, selectedRecord: [String: Any]?, infos: [String: [String: Any]] = [:]
     var pCats = ChipRow(height: 22)
     lazy var pName = label("", size: 16, color: T.text, weight: .bold); lazy var pOwner = label("", size: 12, color: T.muted, wrap: false); lazy var pStats = label("", size: 12, color: T.muted)
@@ -285,7 +287,22 @@ final class Launcher: NSObject, NSApplicationDelegate, NSCollectionViewDataSourc
                 self.setDrawer(true)
             }
         }
-        if let path = ProcessInfo.processInfo.environment["LC_SNAPSHOT"] {
+        if ProcessInfo.processInfo.environment["LC_SNAPSHOT_MODSBUSY"] == "1" {  // review the Mods tab bar while a mods command runs
+            DispatchQueue.main.asyncAfter(deadline: .now() + 6.5) {
+                self.show("mods"); self.pendingInstall = ["A-One", "B-Two"]; self.pendingRemove = []
+                self.beginTask(["mods", "apply"]); self.modsBusy = true; self.setBusy(true)
+                self.consume("##status Downloading MoreCompany 1.14.0 (2 of 5)\n##progress 37\n")
+            }
+        }
+        if ProcessInfo.processInfo.environment["LC_SNAPSHOT_MENU"] == "1", let path = ProcessInfo.processInfo.environment["LC_SNAPSHOT"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 8) {  // the menu tracks modally, so schedule the snapshot first
+                self.setMode("mods")
+                let t = Timer(timeInterval: 1, repeats: false) { _ in self.snapshot(to: path); exit(0) }  // common modes: a GCD block would not run while the menu tracks
+                RunLoop.main.add(t, forMode: .common)
+                self.openProfileMenu()
+            }
+        }
+        if let path = ProcessInfo.processInfo.environment["LC_SNAPSHOT"], ProcessInfo.processInfo.environment["LC_SNAPSHOT_MENU"] != "1" {
             if let tab = ProcessInfo.processInfo.environment["LC_SNAPSHOT_TAB"] { show(tab) }
             DispatchQueue.main.asyncAfter(deadline: .now() + 9) { self.snapshot(to: path); NSApp.terminate(nil) }
         }
@@ -295,7 +312,16 @@ final class Launcher: NSObject, NSApplicationDelegate, NSCollectionViewDataSourc
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ s: NSApplication) -> Bool { true }
     func snapshot(to path: String) {
-        guard let cg = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber), [.boundsIgnoreFraming, .bestResolution]) else { return }
+        var shot = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber), [.boundsIgnoreFraming, .bestResolution])
+        if ProcessInfo.processInfo.environment["LC_SNAPSHOT_MENU"] == "1" {  // screen region of the window, so the open menu is in the picture
+            let f = window.frame, h = NSScreen.screens.first?.frame.height ?? 0
+            let rect = CGRect(x: f.minX, y: h - f.maxY, width: f.width, height: f.height)
+            // only this app's on-screen windows (the window plus its open menu), so system prompts from other processes stay out of the picture
+            let mine = ((CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]]) ?? []).filter { ($0[kCGWindowOwnerPID as String] as? Int32) == getpid() }.compactMap { $0[kCGWindowNumber as String] as? UInt32 }
+            var raw = mine.map { UnsafeRawPointer(bitPattern: UInt($0)) }  // CGWindowIDs stored as raw pointer values, as the API expects
+            if let arr = CFArrayCreate(nil, &raw, raw.count, nil) { shot = CGImage(windowListFromArrayScreenBounds: rect, windowArray: arr, imageOption: [.bestResolution]) }
+        }
+        guard let cg = shot else { return }
         if let png = NSBitmapImageRep(cgImage: cg).representation(using: .png, properties: [:]) { try? png.write(to: URL(fileURLWithPath: path)) }
     }
 
@@ -372,7 +398,7 @@ final class Launcher: NSObject, NSApplicationDelegate, NSCollectionViewDataSourc
         heroSub = label("", size: 13, color: NSColor(white: 1, alpha: 0.75), wrap: false)
         // Vanilla | Mods switch (+ the profile popup in Mods mode), then one wide Play that follows the switch
         modeSwitch = SegSwitch(["Vanilla", "Mods"]); modeSwitch.onChange = { [weak self] i in self?.setMode(i == 1 ? "mods" : "vanilla") }
-        styledPopup(profilesHome); profilesHome.target = self; profilesHome.action = #selector(profileChangedHome)
+        profilesHome = flat("Default  ▾", #selector(openProfileMenu)); profilesHome.fill = T.card2; profilesHome.setAccessibilityLabel("Profile")
         let modeRow = hstack([modeSwitch, profilesHome], spacing: 10)
         playButton = flat("▶  Play", #selector(playSelected), primary: true); playButton.heightConstraint.constant = 38
         playButton.font = .systemFont(ofSize: 14, weight: .bold); playButton.layer?.cornerRadius = 8; playButton.refresh()
@@ -488,9 +514,11 @@ final class Launcher: NSObject, NSApplicationDelegate, NSCollectionViewDataSourc
     func buildApplyBar() -> NSView {
         let bar = Card(fill: T.card2, radius: 10)
         applyLabel = label("", size: 13, color: T.text, weight: .semibold, wrap: false)
-        let row = hstack([applyLabel, NSView(), flat("Discard", #selector(discardPending)), flat("Apply changes", #selector(applyPending), primary: true)], spacing: 8)
+        applyProg = NSProgressIndicator(); applyProg.style = .bar; applyProg.minValue = 0; applyProg.maxValue = 100; applyProg.isHidden = true
+        applyProg.translatesAutoresizingMaskIntoConstraints = false; applyProg.widthAnchor.constraint(equalToConstant: 200).isActive = true
+        let row = hstack([applyLabel, applyProg, NSView(), flat("Discard", #selector(discardPending)), flat("Apply changes", #selector(applyPending), primary: true)], spacing: 8)
         row.edgeInsets = NSEdgeInsets(top: 9, left: 16, bottom: 9, right: 10); fill(row, in: bar)
-        (row.arrangedSubviews[2] as? FlatButton)?.fill = T.card
+        (row.arrangedSubviews[3] as? FlatButton)?.fill = T.card
         return bar
     }
 
@@ -561,6 +589,7 @@ final class Launcher: NSObject, NSApplicationDelegate, NSCollectionViewDataSourc
             if taskState == .busy, let p = taskPct { line.append(NSAttributedString(string: "  ·  \(Int(p))%", attributes: [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: T.muted, .paragraphStyle: oneLine])) }
             drawerLine.attributedStringValue = line
         }
+        if modsBusy { updateApplyBar() }
         taskBar.isHidden = !barVisible || taskState == .fail
         if let p = taskPct { taskBar.isIndeterminate = false; taskBar.stopAnimation(nil); taskBar.doubleValue = p }
         else { taskBar.isIndeterminate = true; if barVisible { taskBar.startAnimation(nil) } else { taskBar.stopAnimation(nil) } }
@@ -644,14 +673,14 @@ final class Launcher: NSObject, NSApplicationDelegate, NSCollectionViewDataSourc
         sub.addAttribute(.paragraphStyle, value: oneLine, range: NSRange(location: 0, length: sub.length)); heroSub.attributedStringValue = sub
         let names = ((try? FileManager.default.contentsOfDirectory(atPath: support.appendingPathComponent("profiles").path)) ?? []).filter { !$0.hasPrefix(".") && !$0.hasSuffix(".txt") }.sorted()
         let current = profiles.titleOfSelectedItem
-        for pop in [profiles, profilesHome] where Set(names.isEmpty ? ["Default"] : names) != Set(pop.itemTitles) {
+        for pop in [profiles] where Set(names.isEmpty ? ["Default"] : names) != Set(pop.itemTitles) {
             pop.removeAllItems(); pop.addItems(withTitles: names.isEmpty ? ["Default"] : names)
             let saved = UserDefaults.standard.string(forKey: "lc.profile")
             if let c = current, names.contains(c) { pop.selectItem(withTitle: c) }
             else if let c = saved, names.contains(c) { pop.selectItem(withTitle: c) }
             else if names.contains("Default") { pop.selectItem(withTitle: "Default") }
         }
-        syncProfileChips()
+        updateProfileButton(); syncProfileChips()
     }
     /// One status cell: bold value in `color`, then `short` (or the hint itself) as the one-line hint; the full hint is the tooltip.
     func set(_ key: String, _ value: String, _ hint: String, _ color: NSColor, short: String? = nil) {
@@ -694,11 +723,11 @@ final class Launcher: NSObject, NSApplicationDelegate, NSCollectionViewDataSourc
                 pipe.fileHandleForReading.readabilityHandler = nil
                 self.endTask(pr.terminationStatus)
                 self.appendLog(pr.terminationStatus == 0 ? "\n" : "\n(exited with code \(pr.terminationStatus))\n")
-                self.process = nil; self.setBusy(false); self.refreshStatus(); then?()
+                self.process = nil; self.modsBusy = false; self.setBusy(false); self.refreshStatus(); then?()
             }
         }
         appendLog("\n$ lcport " + args.joined(separator: " ") + "\n"); beginTask(args)
-        do { try p.run(); process = p; setBusy(true); if !drawerOpen && current != "activity" { setDrawer(true) } }
+        do { try p.run(); process = p; modsBusy = args.first == "mods" && args.count > 1 && args[1] != "audit"; setBusy(true); if !drawerOpen && current != "activity" { setDrawer(true) } }
         catch { appendLog("could not start: \(error)\n"); _ = control("##fail Could not start the task, see Activity"); barVisible = false; renderTask() }
     }
     func kitJSON(_ args: [String], _ completion: @escaping (Any?) -> Void) {
@@ -762,11 +791,39 @@ final class Launcher: NSObject, NSApplicationDelegate, NSCollectionViewDataSourc
 
     // MARK: mods
     @objc func profileChanged() {
-        UserDefaults.standard.set(profile, forKey: "lc.profile"); profilesHome.selectItem(withTitle: profile)
+        UserDefaults.standard.set(profile, forKey: "lc.profile"); updateProfileButton()
         pendingInstall.removeAll(); pendingRemove.removeAll(); syncProfileChips()
         reloadInstalled { self.afterInstalledChange() }
     }
-    @objc func profileChangedHome() { if let t = profilesHome.titleOfSelectedItem { profiles.selectItem(withTitle: t) }; profileChanged() }
+    /// Home's profile control: a pill titled "<name>  ▾" (chevron muted) that drops a menu of profiles plus New / Remove.
+    func updateProfileButton() {
+        profilesHome.title = profile + "  ▾"; profilesHome.refresh()
+    }
+    @objc func openProfileMenu() {
+        let m = NSMenu(); m.autoenablesItems = false
+        for n in profiles.itemTitles {
+            let it = NSMenuItem(title: n, action: #selector(profileMenuPicked(_:)), keyEquivalent: ""); it.target = self; it.state = n == profile ? .on : .off; m.addItem(it)
+        }
+        m.addItem(.separator())
+        let add = NSMenuItem(title: "New profile…", action: #selector(newProfile), keyEquivalent: ""); add.target = self; m.addItem(add)
+        let rm = NSMenuItem(title: "Remove '\(profile)'…", action: #selector(removeProfile), keyEquivalent: ""); rm.target = self
+        rm.isEnabled = profiles.numberOfItems > 1; m.addItem(rm)
+        m.popUp(positioning: nil, at: NSPoint(x: 0, y: profilesHome.isFlipped ? profilesHome.bounds.height + 3 : -3), in: profilesHome)  // bottom-left of the button
+    }
+    @objc func profileMenuPicked(_ item: NSMenuItem) { guard item.title != profile else { return }; profiles.selectItem(withTitle: item.title); profileChanged() }
+    @objc func removeProfile() {
+        let name = profile, a = NSAlert(); a.alertStyle = .critical
+        a.messageText = "Remove profile '\(name)'?"; a.informativeText = "Its mods are deleted from this Mac. Mod lists you imported can be imported again."
+        a.addButton(withTitle: "Remove"); a.addButton(withTitle: "Cancel")
+        guard a.runModal() == .alertFirstButtonReturn else { return }
+        run(["mods", "delete-profile", name]) {
+            let rest = self.profiles.itemTitles.filter { $0 != name }
+            UserDefaults.standard.set(rest.contains("Default") ? "Default" : (rest.first ?? "Default"), forKey: "lc.profile")
+            self.refreshStatus()
+            if let t = (rest.contains("Default") ? "Default" : rest.first) { self.profiles.selectItem(withTitle: t) }
+            self.profileChanged()
+        }
+    }
     @objc func profileChipClicked(_ sender: Pill) { guard sender.title != profile else { return }; profiles.selectItem(withTitle: sender.title); profileChanged() }
     /// Rebuilds the profile chips from the hidden `profiles` popup (the source of truth shared with Home) when its items or selection change.
     func syncProfileChips() {
@@ -872,6 +929,14 @@ final class Launcher: NSObject, NSApplicationDelegate, NSCollectionViewDataSourc
         updateApplyBar(); fillPanel()
     }
     func updateApplyBar() {
+        if modsBusy {  // a mods command is running: the bar shows its status and progress instead of the pending counts
+            var t = taskText; if let pc = taskPct, taskState == .busy { t += "  ·  \(Int(pc))%" }
+            applyLabel.stringValue = t; applyProg.isHidden = false
+            if let pc = taskPct { applyProg.isIndeterminate = false; applyProg.stopAnimation(nil); applyProg.doubleValue = pc } else { applyProg.isIndeterminate = true; applyProg.startAnimation(nil) }
+            if applyBar.isHidden { applyBar.isHidden = false; bodyToPage.isActive = false; bodyToBar.isActive = true }
+            return
+        }
+        applyProg.isHidden = true; applyProg.stopAnimation(nil)
         var parts: [String] = []
         if !pendingInstall.isEmpty { parts.append("\(pendingInstall.count) to install") }
         if !pendingRemove.isEmpty { parts.append("\(pendingRemove.count) to remove") }

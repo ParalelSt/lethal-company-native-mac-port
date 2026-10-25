@@ -10,6 +10,8 @@ Format: [Keep a Changelog](https://keepachangelog.com). Versions follow the laun
 - `net-fix` / `net-verify`: restore and check the original network prefab hashes in the installed app.
 - Progress in the launcher: a plain-language status line and a progress bar for builds, mod installs and launches (the kit prints `##status` / `##progress` / `##done` / `##fail` lines).
 - README section on getting the Windows copy of the game (SteamCMD on the Mac, a Windows PC, or Steam in a wrapper).
+- `mods delete-profile <name>` and a profile dropdown on Home that switches, adds and removes profiles.
+- Download percentage for mod installs: the kit streams each mod with byte progress and the Mods tab shows the status and bar in its bottom bar.
 
 ### Changed
 - The modded app starts through a small native launcher instead of a shell script, so Steam's overlay reaches the game and the last chosen profile is used.

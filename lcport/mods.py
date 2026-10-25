@@ -1,6 +1,7 @@
 """Thunderstore mod manager for the macOS build (r2modman-compatible profile layout) with a Mac compatibility audit.
 
   mods profiles                      list profiles
+  mods delete-profile <name>         delete a profile and its mods (never the last one)
   mods search <text>                 search Thunderstore (lethal-company)
   mods install <profile> <Author-Name>[-x.y.z] ...   install mods (+dependencies), then audit
   mods remove  <profile> <Author-Name>
@@ -56,10 +57,23 @@ def manifest_path(name): return os.path.join(config.PROFILES, name, "mods.json")
 def load_manifest(name): return json.load(open(manifest_path(name))) if os.path.exists(manifest_path(name)) else {}
 def save_manifest(name, m): json.dump(m, open(manifest_path(name), "w"), indent=1)
 
-def download(v):
+def download(v, span=None):
+    """Fetch a mod zip into the cache in 64 KiB chunks. With a span (start_pct, end_pct) and a known Content-Length,
+    emit ##progress lines moving from start to end as the bytes arrive."""
     p = os.path.join(config.CACHE, "mods", v["full_name"] + ".zip"); os.makedirs(os.path.dirname(p), exist_ok=True)
-    if not os.path.exists(p):
-        print(f"  downloading {v['full_name']}", flush=True); open(p, "wb").write(http(v["download_url"], binary=True))
+    if os.path.exists(p): return p
+    print(f"  downloading {v['full_name']}", flush=True)
+    req = urllib.request.Request(v["download_url"], headers=UA); tmp = p + ".part"
+    with urllib.request.urlopen(req, timeout=60) as r, open(tmp, "wb") as f:
+        try: total = int(r.headers.get("Content-Length") or 0)
+        except (TypeError, ValueError): total = 0
+        got = 0
+        while True:
+            chunk = r.read(65536)
+            if not chunk: break
+            f.write(chunk); got += len(chunk)
+            if span and total: say_progress(span[0] + (span[1] - span[0]) * min(1.0, got / total))
+    os.replace(tmp, p)
     return p
 
 def extract_mod(zip_path, bep, full_name):
@@ -84,26 +98,35 @@ def extract_mod(zip_path, bep, full_name):
             with z.open(info) as s, open(target, "wb") as d: shutil.copyfileobj(s, d)
 
 def install(profile, refs, pinned=None, span=(0, 90)):
-    """span: the part of the launcher's progress bar (percent) this install fills, one share per package."""
+    """span: the part of the launcher's progress bar (percent) this install fills, one share per package.
+    The total grows when dependencies join the queue; progress is clamped so it never goes backwards."""
     idx = by_name(index()); bep = profile_dir(profile); man = load_manifest(profile)
-    queue = list(refs); done = set()
+    queue = list(refs); done = set(); high = [span[0]]
+    def report(pct): high[0] = max(high[0], pct); say_progress(high[0])
     while queue:
         ref = queue.pop(0); name, ver = split_ref(ref)
         if name in done: continue
-        left = len({split_ref(r)[0] for r in queue} - done - {name})  # dependencies found later grow the total
-        say_progress(span[0] + (span[1] - span[0]) * len(done) / (len(done) + left + 1))
+        n = len(done) + len({split_ref(r)[0] for r in queue} - done - {name}) + 1
+        i = len(done); lo = span[0] + (span[1] - span[0]) * i / n; hi = span[0] + (span[1] - span[0]) * (i + 1) / n
+        lo = max(lo, high[0]); hi = max(hi, lo)  # never behind what was already reported
+        report(lo)
         if name not in idx: raise SystemExit(f"unknown package {name}")
         if pinned and name in pinned: ver = pinned[name]
         v = pick_version(idx[name], ver); done.add(name); have = man.get(name)
         if have and vtuple(have) >= vtuple(v["version_number"]) and not (pinned and name in pinned):
             print(f"  {name} {have} already installed")
         else:
-            print(f"installing {name} {v['version_number']}", flush=True); say_status(f"installing {name.split('-', 1)[-1]} {v['version_number']}")
-            extract_mod(download(v), bep, name); man[name] = v["version_number"]
+            short = f"{name.split('-', 1)[-1]} {v['version_number']} ({i + 1} of {n})"
+            print(f"installing {name} {v['version_number']}", flush=True); say_status(f"Downloading {short}")
+            mid = lo + (hi - lo) * 0.85
+            path = download(v, (lo, mid))
+            report(mid); say_status(f"Installing {short}")
+            extract_mod(path, bep, name); man[name] = v["version_number"]
+        report(hi)
         for dep in v["dependencies"]:
             dn, _ = split_ref(dep)
             if dn not in done: queue.append(dep if not pinned else dn)
-    save_manifest(profile, man); print(f"profile '{profile}': {len(man)} mods"); say_progress(span[1])
+    save_manifest(profile, man); print(f"profile '{profile}': {len(man)} mods"); report(span[1])
 
 def remove(profile, name):
     bep = profile_dir(profile); man = load_manifest(profile)
@@ -288,6 +311,13 @@ def apply(profile, installs, removes):
         print(f"[{len(removes) + 1}-{total}/{total}] installing {', '.join(installs)}", flush=True); install(profile, installs, span=(cut, 90))
     say_progress(90); audit(profile, save=True)
 
+def delete_profile(name):
+    """Remove a profile folder; refuses a missing profile, a name that escapes PROFILES, and the last remaining profile. Returns the exit code."""
+    names = [p for p in (os.listdir(config.PROFILES) if os.path.isdir(config.PROFILES) else []) if os.path.isdir(os.path.join(config.PROFILES, p))]
+    if not name or name in (".", "..") or "/" in name or name not in names: print(f"no such profile: {name}"); return 1
+    if len(names) <= 1: print(f"cannot delete {name}: it is the only profile"); return 1
+    shutil.rmtree(os.path.join(config.PROFILES, name)); print(f"deleted profile {name}"); say_done(f"Deleted profile {name}"); return 0
+
 def main(a):
     if not a or a[0] in ("-h", "--help"): print(__doc__); return
     cmd = a[0]
@@ -304,6 +334,8 @@ def main(a):
         os.makedirs(config.PROFILES, exist_ok=True)
         for p in sorted(os.listdir(config.PROFILES)):
             if os.path.isdir(os.path.join(config.PROFILES, p)): print(f"  {p}: {len(load_manifest(p))} mods")
+    elif cmd == "delete-profile":
+        sys.exit(delete_profile(a[1] if len(a) > 1 else ""))
     elif cmd == "search":
         q = " ".join(a[1:]).lower()
         hits = sorted([p for p in index() if q in p["full_name"].lower() or q in p["versions"][0]["description"].lower()], key=lambda p: -p["rating_score"])
