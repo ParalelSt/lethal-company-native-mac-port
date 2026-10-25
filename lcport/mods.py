@@ -8,6 +8,10 @@
   mods update  <profile>             update every installed mod to latest, then audit
   mods import  <profile> <code>      import an r2modman / Thunderstore profile share code, then audit
   mods audit   <profile>             classify mods: SHOULD WORK / AUTO-FIXED (MacShaderFix) / NEEDS FIXING
+  mods apply   <profile> --install <names...> --remove <names...>   batch change: removes first, then installs, then audit
+  mods json-search [--installed <profile>] <text>   JSON search results for the launcher
+  mods json-info <Author-Name>       JSON details (dependencies, website, versions) for one package
+  mods json-installed <profile>      JSON installed mods + saved audit
 """
 import os, sys, json, time, io, zipfile, shutil, base64, urllib.request, re, tempfile
 from . import config, dotnetmeta, thirdparty
@@ -218,22 +222,73 @@ def audit(profile, save=True):
 
 def name_safe(s): return re.sub(r"[^A-Za-z0-9_.-]", "_", s)
 
-def json_search(query, limit=300):
+def catalog():
+    """Slim copy of the Thunderstore index (only what the launcher shows), cached next to it so JSON queries skip parsing ~350 MB."""
+    os.makedirs(config.CACHE, exist_ok=True)
+    p = os.path.join(config.CACHE, "thunderstore-catalog.json"); src = os.path.join(config.CACHE, "thunderstore-index.json")
+    if os.path.exists(p) and time.time() - os.path.getmtime(p) < 3600 and (not os.path.exists(src) or os.path.getmtime(src) <= os.path.getmtime(p)):
+        try:
+            with open(p) as f: return json.load(f)
+        except Exception: pass
+    out = []
+    for pk in index():
+        if pk.get("is_deprecated") or not pk.get("versions"): continue
+        v = pk["versions"][0]
+        out.append({"full_name": pk["full_name"], "name": pk["name"], "owner": pk["owner"], "version": v["version_number"],
+                    "downloads": sum(x.get("downloads", 0) for x in pk["versions"]), "rating": pk.get("rating_score", 0),
+                    "description": v.get("description", ""), "categories": pk.get("categories", []), "icon": v.get("icon", ""),
+                    "website": v.get("website_url") or pk.get("website_url", ""), "dependencies": v.get("dependencies", []),
+                    "date_updated": pk.get("date_updated", ""), "versions": [x["version_number"] for x in pk["versions"][:10]]})
+    tmp = f"{p}.{os.getpid()}.tmp"
+    with open(tmp, "w") as f: json.dump(out, f)
+    os.replace(tmp, p)
+    return out
+
+SEARCH_FIELDS = ("full_name", "name", "owner", "version", "downloads", "rating", "description", "categories", "icon", "website")
+
+def json_search(query, limit=300, only=None):
+    """Packages matching query (name or description), most downloaded first. only: restrict to these full names (e.g. installed mods)."""
     q = query.lower().strip(); out = []
-    for p in index():
-        if p.get("is_deprecated"): continue
-        v = p["versions"][0]
-        if q and q not in p["full_name"].lower() and q not in v["description"].lower(): continue
-        out.append({"full_name": p["full_name"], "name": p["name"], "owner": p["owner"], "version": v["version_number"],
-                    "downloads": sum(x.get("downloads", 0) for x in p["versions"]), "rating": p.get("rating_score", 0),
-                    "description": v["description"], "categories": p.get("categories", [])})
+    for p in catalog():
+        if only is not None and p["full_name"] not in only: continue
+        if q and q not in p["full_name"].lower() and q not in p["description"].lower(): continue
+        out.append({k: p[k] for k in SEARCH_FIELDS})
     out.sort(key=lambda x: -x["downloads"])
     return out[:limit]
+
+def json_info(full_name):
+    for p in catalog():
+        if p["full_name"] == full_name:
+            return {"full_name": full_name, "dependencies": p["dependencies"], "website": p["website"], "date_updated": p["date_updated"], "versions": p["versions"][:10]}
+    return {"error": "unknown"}
+
+def parse_apply(a):
+    """apply <profile> --install A B --remove C D  ->  (profile, [A, B], [C, D]); either list may be empty or missing."""
+    if not a or a[0].startswith("--"): raise SystemExit("usage: mods apply <profile> --install <names...> --remove <names...>")
+    profile, lists, cur = a[0], {"--install": [], "--remove": []}, None
+    for x in a[1:]:
+        if x in lists: cur = x
+        elif cur is None: raise SystemExit(f"apply: unexpected argument {x} (use --install / --remove)")
+        else: lists[cur].append(x)
+    return profile, lists["--install"], lists["--remove"]
+
+def apply(profile, installs, removes):
+    total = len(installs) + len(removes)
+    print(f"applying {total} change(s) to profile '{profile}': {len(installs)} to install, {len(removes)} to remove", flush=True)
+    for i, name in enumerate(removes, 1):
+        print(f"[{i}/{total}] removing {name}", flush=True); remove(profile, name)
+    if installs:
+        print(f"[{len(removes) + 1}-{total}/{total}] installing {', '.join(installs)}", flush=True); install(profile, installs)
+    audit(profile, save=True)
 
 def main(a):
     if not a or a[0] in ("-h", "--help"): print(__doc__); return
     cmd = a[0]
-    if cmd == "json-search": print(json.dumps(json_search(" ".join(a[1:])))); return
+    if cmd == "json-search":
+        rest, only = a[1:], None
+        if rest[:1] == ["--installed"]: only, rest = set(load_manifest(rest[1])), rest[2:]
+        print(json.dumps(json_search(" ".join(rest), only=only))); return
+    if cmd == "json-info": print(json.dumps(json_info(a[1]))); return
     if cmd == "json-installed":
         prof = a[1]; ap = os.path.join(config.PROFILES, prof, "audit.json")
         aud = json.load(open(ap)) if os.path.exists(ap) else {}
@@ -246,12 +301,13 @@ def main(a):
         q = " ".join(a[1:]).lower()
         hits = sorted([p for p in index() if q in p["full_name"].lower() or q in p["versions"][0]["description"].lower()], key=lambda p: -p["rating_score"])
         for p in hits[:25]: print(f"  {p['full_name']:45s} {p['versions'][0]['version_number']:10s} {p['rating_score']:5d}  {p['versions'][0]['description'][:60]}")
-    elif cmd == "install": install(a[1], a[2:]); audit(a[1])
+    elif cmd == "install": install(a[1], a[2:]); audit(a[1], save=True)
     elif cmd == "remove": remove(a[1], a[2])
     elif cmd == "list":
         for n, v in sorted(load_manifest(a[1]).items()): print(f"  {n} {v}")
-    elif cmd == "update": install(a[1], list(load_manifest(a[1]).keys())); audit(a[1])
-    elif cmd == "import": import_code(a[1], a[2]); audit(a[1])
+    elif cmd == "update": install(a[1], list(load_manifest(a[1]).keys())); audit(a[1], save=True)
+    elif cmd == "import": import_code(a[1], a[2]); audit(a[1], save=True)
+    elif cmd == "apply": apply(*parse_apply(a[1:]))
     elif cmd == "audit": audit(a[1])
     else: print(__doc__)
 

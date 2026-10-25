@@ -1,7 +1,7 @@
 import AppKit
 import Foundation
 
-// Native launcher window styled like a web app: sidebar navigation, banner header, rounded cards, row cards for mods,
+// Native launcher window styled like a web app: sidebar navigation, banner header, rounded cards, a grid of mod tiles,
 // collapsible log drawer. Every action runs the Python kit ("python3 -m lcport ...") in the kit folder next to this
 // app bundle; output streams into the drawer.
 
@@ -60,49 +60,163 @@ final class NavRow: NSView {
     required init?(coder: NSCoder) { fatalError() }
 }
 
-final class ModCell: NSTableCellView {
-    let bg = Card(fill: T.card, radius: 10)
-    let name = NSTextField(labelWithString: ""), meta = NSTextField(labelWithString: ""), desc = NSTextField(wrappingLabelWithString: ""), badge = NSTextField(labelWithString: "")
-    let action = FlatButton("Install", fill: T.accent, text: NSColor(srgbRed: 0.10, green: 0.05, blue: 0.02, alpha: 1), target: nil, action: #selector(Launcher.cellAction(_:)))
+// MARK: - mods page pieces
+/// Rounded toggle pill used for profile chips, category chips and the side panel's category tags.
+final class Pill: NSButton {
+    var active = false { didSet { refresh() } }
+    var pillHeight: CGFloat = 24
+    convenience init(_ title: String, height: CGFloat = 24, target: AnyObject?, action: Selector?) {
+        self.init(frame: .zero); self.title = title; pillHeight = height; self.target = target; self.action = action
+        isBordered = false; wantsLayer = true; layer?.cornerRadius = height / 2; layer?.borderWidth = 1
+        font = .systemFont(ofSize: 12.5, weight: .semibold); refresh()
+    }
+    func refresh() {
+        layer?.backgroundColor = (active ? T.card2 : NSColor.clear).cgColor; layer?.borderColor = T.card2.cgColor
+        let p = NSMutableParagraphStyle(); p.alignment = .center
+        attributedTitle = NSAttributedString(string: title, attributes: [.foregroundColor: active ? NSColor.white : T.muted, .font: font!, .paragraphStyle: p])
+    }
+    override var intrinsicContentSize: NSSize { NSSize(width: ceil(attributedTitle.size().width) + 24, height: pillHeight) }
+}
+
+/// One-line row laid out left to right by hand; views that do not fit are hidden instead of being clipped. An optional
+/// trailing view (e.g. the mod count) is pinned to the right end.
+final class ChipRow: NSView {
+    var views: [NSView] = [] { didSet { oldValue.forEach { $0.removeFromSuperview() }; views.forEach { $0.translatesAutoresizingMaskIntoConstraints = true; addSubview($0) }; needsLayout = true } }
+    var trailing: NSView? { didSet { oldValue?.removeFromSuperview(); if let t = trailing { t.translatesAutoresizingMaskIntoConstraints = true; addSubview(t) }; needsLayout = true } }
+    var spacing: CGFloat = 6, height: CGFloat = 24
+    convenience init(height: CGFloat, spacing: CGFloat = 6) { self.init(frame: .zero); self.height = height; self.spacing = spacing; translatesAutoresizingMaskIntoConstraints = false }
+    override var isFlipped: Bool { true }
+    override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: height) }
+    /// Text fields measure their full text (a truncating label's intrinsic width can be squeezed); everything else its intrinsic size.
+    static func size(of v: NSView) -> NSSize { if let t = v as? NSTextField, let c = t.cell { let s = c.cellSize; return NSSize(width: ceil(s.width), height: ceil(s.height)) }; return v.intrinsicContentSize }
+    override func layout() {
+        super.layout()
+        var limit = bounds.width
+        if let t = trailing { let s = ChipRow.size(of: t); t.frame = NSRect(x: bounds.width - s.width, y: floor((height - s.height) / 2), width: s.width, height: s.height); limit -= s.width + 12 }
+        var x: CGFloat = 0, full = false
+        for v in views {
+            let s = ChipRow.size(of: v)
+            if full || x + s.width > limit { full = true; v.isHidden = true; continue }
+            v.isHidden = false; v.frame = NSRect(x: x, y: floor((height - s.height) / 2), width: s.width, height: s.height); x += s.width + spacing
+        }
+    }
+}
+
+/// Thunderstore icons: memory cache, then ~/Library/Application Support/LethalCompanyMac/cache/icons/<full_name>.png, then the
+/// network. Decoding and downloads run off the main thread; callbacks arrive on the main thread.
+final class IconCache {
+    static let shared = IconCache()
+    let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/LethalCompanyMac/cache/icons")
+    private let mem = NSCache<NSString, NSImage>()
+    private var waiting: [String: [(NSImage?) -> Void]] = [:], failed = Set<String>()
+    func cached(_ key: String) -> NSImage? { mem.object(forKey: key as NSString) }
+    func image(_ key: String, url: String, _ done: @escaping (NSImage?) -> Void) {
+        if let i = cached(key) { done(i); return }
+        if failed.contains(key) || key.isEmpty { done(nil); return }
+        if waiting[key] != nil { waiting[key]!.append(done); return }
+        waiting[key] = [done]
+        let file = dir.appendingPathComponent(key.replacingOccurrences(of: "/", with: "_") + ".png")
+        DispatchQueue.global(qos: .userInitiated).async {
+            if let d = try? Data(contentsOf: file), let img = IconCache.decode(d) { self.finish(key, img); return }
+            guard !url.isEmpty, let u = URL(string: url) else { self.finish(key, nil); return }
+            URLSession.shared.dataTask(with: u) { data, resp, _ in
+                guard let data = data, (resp as? HTTPURLResponse)?.statusCode == 200, let img = IconCache.decode(data) else { self.finish(key, nil); return }
+                try? FileManager.default.createDirectory(at: self.dir, withIntermediateDirectories: true); try? data.write(to: file, options: .atomic)
+                self.finish(key, img)
+            }.resume()
+        }
+    }
+    private func finish(_ key: String, _ img: NSImage?) {
+        DispatchQueue.main.async {
+            if let i = img { self.mem.setObject(i, forKey: key as NSString) } else { self.failed.insert(key) }
+            for cb in self.waiting.removeValue(forKey: key) ?? [] { cb(img) }
+        }
+    }
+    /// Thumbnail at 2x the largest size shown (56pt in the side panel), so 300 tiles stay light in memory.
+    static func decode(_ data: Data) -> NSImage? {
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil),
+              let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: 112, kCGImageSourceCreateThumbnailWithTransform: true] as CFDictionary) else { return nil }
+        return NSImage(cgImage: cg, size: NSSize(width: 56, height: 56))
+    }
+}
+
+func roundedIcon(_ size: CGFloat) -> NSImageView {
+    let v = NSImageView(); v.wantsLayer = true; v.layer?.cornerRadius = size >= 50 ? 12 : 8; v.layer?.masksToBounds = true; v.layer?.backgroundColor = T.card2.cgColor
+    v.imageScaling = .scaleProportionallyUpOrDown; v.translatesAutoresizingMaskIntoConstraints = false
+    v.widthAnchor.constraint(equalToConstant: size).isActive = true; v.heightAnchor.constraint(equalToConstant: size).isActive = true; return v
+}
+
+final class ModTileView: NSView {
+    let card = Card(fill: T.card, radius: 10), stripe = NSView(), icon = roundedIcon(36)
+    let name = NSTextField(labelWithString: ""), meta = NSTextField(wrappingLabelWithString: ""), desc = NSTextField(wrappingLabelWithString: ""), state = NSTextField(labelWithString: "")
+    let check = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    var iconKey = "", onClick: (() -> Void)?
+    var selected = false { didSet { card.layer?.borderColor = (selected ? T.accent : T.line).cgColor; card.layer?.borderWidth = selected ? 2 : 1 } }
     override init(frame: NSRect) {
         super.init(frame: frame)
-        addSubview(bg)
-        name.font = .systemFont(ofSize: 14, weight: .semibold); name.textColor = T.text
-        meta.font = .systemFont(ofSize: 11.5); meta.textColor = T.muted
-        desc.font = .systemFont(ofSize: 12); desc.textColor = T.muted; desc.maximumNumberOfLines = 2; desc.lineBreakMode = .byTruncatingTail; desc.isSelectable = false
-        badge.font = .systemFont(ofSize: 11, weight: .medium); badge.textColor = T.ok; badge.alignment = .right
-        for v in [name, meta, desc, badge] { v.translatesAutoresizingMaskIntoConstraints = false; bg.addSubview(v) }
-        action.padding = 12; bg.addSubview(action)
+        card.layer?.masksToBounds = true; addSubview(card)
+        stripe.wantsLayer = true; stripe.translatesAutoresizingMaskIntoConstraints = false
+        name.font = .systemFont(ofSize: 13, weight: .bold); name.textColor = T.text; name.lineBreakMode = .byTruncatingTail
+        meta.font = .systemFont(ofSize: 11); meta.textColor = T.muted; meta.maximumNumberOfLines = 2; meta.cell?.truncatesLastVisibleLine = true
+        desc.font = .systemFont(ofSize: 11.5); desc.textColor = T.muted; desc.maximumNumberOfLines = 2; desc.cell?.truncatesLastVisibleLine = true
+        state.font = .systemFont(ofSize: 11.5, weight: .medium); state.lineBreakMode = .byTruncatingTail
+        for v in [name, meta, desc, state] { v.isSelectable = false; v.setContentCompressionResistancePriority(.defaultLow, for: .horizontal) }
+        check.translatesAutoresizingMaskIntoConstraints = false
+        for v in [stripe, icon, name, meta, desc, state, check] as [NSView] { v.translatesAutoresizingMaskIntoConstraints = false; card.addSubview(v) }
         NSLayoutConstraint.activate([
-            bg.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2), bg.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2),
-            bg.topAnchor.constraint(equalTo: topAnchor, constant: 3), bg.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -3),
-            name.leadingAnchor.constraint(equalTo: bg.leadingAnchor, constant: 14), name.topAnchor.constraint(equalTo: bg.topAnchor, constant: 10),
-            meta.leadingAnchor.constraint(equalTo: name.trailingAnchor, constant: 8), meta.firstBaselineAnchor.constraint(equalTo: name.firstBaselineAnchor),
-            desc.leadingAnchor.constraint(equalTo: name.leadingAnchor), desc.topAnchor.constraint(equalTo: name.bottomAnchor, constant: 3),
-            desc.trailingAnchor.constraint(lessThanOrEqualTo: badge.leadingAnchor, constant: -12),
-            action.trailingAnchor.constraint(equalTo: bg.trailingAnchor, constant: -12), action.centerYAnchor.constraint(equalTo: bg.centerYAnchor), action.widthAnchor.constraint(equalToConstant: 92),
-            badge.trailingAnchor.constraint(equalTo: action.leadingAnchor, constant: -12), badge.centerYAnchor.constraint(equalTo: bg.centerYAnchor), badge.widthAnchor.constraint(lessThanOrEqualToConstant: 170),
+            card.leadingAnchor.constraint(equalTo: leadingAnchor), card.trailingAnchor.constraint(equalTo: trailingAnchor), card.topAnchor.constraint(equalTo: topAnchor), card.bottomAnchor.constraint(equalTo: bottomAnchor),
+            stripe.leadingAnchor.constraint(equalTo: card.leadingAnchor), stripe.topAnchor.constraint(equalTo: card.topAnchor), stripe.bottomAnchor.constraint(equalTo: card.bottomAnchor), stripe.widthAnchor.constraint(equalToConstant: 3),
+            icon.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 14), icon.topAnchor.constraint(equalTo: card.topAnchor, constant: 12),
+            name.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 10), name.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -12), name.topAnchor.constraint(equalTo: card.topAnchor, constant: 11),
+            meta.leadingAnchor.constraint(equalTo: name.leadingAnchor), meta.trailingAnchor.constraint(equalTo: name.trailingAnchor), meta.topAnchor.constraint(equalTo: name.bottomAnchor, constant: 1), meta.heightAnchor.constraint(equalToConstant: 28),
+            desc.leadingAnchor.constraint(equalTo: icon.leadingAnchor), desc.trailingAnchor.constraint(equalTo: name.trailingAnchor), desc.topAnchor.constraint(equalTo: card.topAnchor, constant: 60), desc.heightAnchor.constraint(equalToConstant: 30),
+            check.leadingAnchor.constraint(equalTo: icon.leadingAnchor), check.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -11),
+            state.leadingAnchor.constraint(equalTo: check.trailingAnchor, constant: 2), state.centerYAnchor.constraint(equalTo: check.centerYAnchor), state.trailingAnchor.constraint(lessThanOrEqualTo: card.trailingAnchor, constant: -12),
         ])
-        meta.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        selected = false
     }
     required init?(coder: NSCoder) { fatalError() }
+    /// Everything but the checkbox counts as the tile body, so a click anywhere else selects the tile.
+    override func hitTest(_ p: NSPoint) -> NSView? {
+        guard let v = super.hitTest(p) else { return nil }
+        return v === check || v.isDescendant(of: check) ? v : self
+    }
+    override func mouseDown(with e: NSEvent) { onClick?() }
+}
+
+final class ModTileItem: NSCollectionViewItem {
+    static let id = NSUserInterfaceItemIdentifier("ModTile")
+    override func loadView() { view = ModTileView(frame: NSRect(x: 0, y: 0, width: 210, height: 150)) }
+    var tile: ModTileView { view as! ModTileView }
+}
+
+/// Flow layout that recomputes tile widths whenever the grid width changes (the side panel opening, window resizes).
+final class TileLayout: NSCollectionViewFlowLayout {
+    private var lastWidth: CGFloat = 0
+    override func shouldInvalidateLayout(forBoundsChange b: NSRect) -> Bool { if b.width != lastWidth { lastWidth = b.width; return true }; return false }
 }
 
 // MARK: - launcher
-final class Launcher: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate {
+final class Launcher: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NSCollectionViewDelegateFlowLayout, NSSearchFieldDelegate {
     let kit: URL
     let support = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/LethalCompanyMac")
     var window: NSWindow!
     var pages: [String: NSView] = [:], navRows: [String: NavRow] = [:], current = "home"
     var heroSub = NSTextField(labelWithString: ""), statusRows: [String: (NSTextField, NSTextField)] = [:]
-    var profilesHome = NSPopUpButton(), profiles = NSPopUpButton(), importField = NSTextField(), search = NSSearchField(), installedOnly = NSButton(checkboxWithTitle: "Installed only", target: nil, action: nil)
-    var table: NSTableView!, modCount = NSTextField(labelWithString: "")
+    var profilesHome = NSPopUpButton(), profiles = NSPopUpButton(), search = NSSearchField()  // `profiles` is hidden: the Mods page's chips select into it
+    var profileRow = ChipRow(height: 26, spacing: 8), chipRow = ChipRow(height: 24), modCount = NSTextField(labelWithString: ""), profileSig = ""
+    var grid: NSCollectionView!, gridScroll: NSScrollView!, gridToEdge: NSLayoutConstraint!, gridToPanel: NSLayoutConstraint!, bodyToPage: NSLayoutConstraint!, bodyToBar: NSLayoutConstraint!
+    var applyBar: NSView!, applyLabel = NSTextField(labelWithString: ""), pendingInstall = Set<String>(), pendingRemove = Set<String>()
+    var panel: NSView!, pAction: FlatButton!, pIcon = roundedIcon(56), pIconKey = "", selectedMod: String?, selectedRecord: [String: Any]?, infos: [String: [String: Any]] = [:]
+    var pCats = ChipRow(height: 22)
+    lazy var pName = label("", size: 16, color: T.text, weight: .bold); lazy var pOwner = label("", size: 12, color: T.muted, wrap: false); lazy var pStats = label("", size: 12, color: T.muted)
+    lazy var pDesc = label("", size: 12.5); lazy var pVerdict = label("", size: 12.5, weight: .semibold); lazy var pNotes = label("", size: 11.5); lazy var pDeps = label("", size: 12, color: T.text)
     var log: NSTextView!, logScroll: NSScrollView!, logHeight: NSLayoutConstraint!, drawerLine = NSTextField(labelWithString: "Ready"), drawerArrow = NSTextField(labelWithString: "▸"), spinner: NSProgressIndicator!, drawerOpen = false
     var activityLog: NSTextView!
     var buttons: [NSButton] = []
     var process: Process?
-    var results: [[String: Any]] = [], installed: [String: String] = [:], audit: [String: [String: Any]] = [:]
-    var searchTimer: Timer?
+    var allResults: [[String: Any]] = [], results: [[String: Any]] = [], installed: [String: String] = [:], audit: [String: [String: Any]] = [:], category = "All"
+    var searchTimer: Timer?, searchSeq = 0, snapshotSelect = false
 
     override init() { kit = Bundle.main.bundleURL.deletingLastPathComponent(); super.init() }
 
@@ -116,6 +230,9 @@ final class Launcher: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
         if let path = ProcessInfo.processInfo.environment["LC_SNAPSHOT"] {
             if let tab = ProcessInfo.processInfo.environment["LC_SNAPSHOT_TAB"] { show(tab) }
             DispatchQueue.main.asyncAfter(deadline: .now() + 9) { self.snapshot(to: path); NSApp.terminate(nil) }
+        }
+        if ProcessInfo.processInfo.environment["LC_SNAPSHOT_SELECT"] == "1" {  // open the side panel on the first tile (or as soon as results arrive)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 7) { if let f = self.results.first?["full_name"] as? String { self.selectMod(f) } else { self.snapshotSelect = true } }
         }
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ s: NSApplication) -> Bool { true }
@@ -233,21 +350,79 @@ final class Launcher: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
     func buildMods() -> NSView {
         let page = NSView(); page.translatesAutoresizingMaskIntoConstraints = false
         let title = label("Mods", size: 24, color: T.text, weight: .bold, wrap: false)
-        let intro = label("Browse Thunderstore and install with one click. Mods go into the selected profile; play them from Home with \"Play with mods\". ✓ works on Mac · ◐ visuals fixed automatically at runtime · ✗ needs porting work.", size: 12.5)
-        styledPopup(profiles); profiles.target = self; profiles.action = #selector(profileChanged)
-        importField.placeholderString = "Paste a Thunderstore / r2modman profile code"; importField.translatesAutoresizingMaskIntoConstraints = false; importField.widthAnchor.constraint(greaterThanOrEqualToConstant: 160).isActive = true; importField.setContentHuggingPriority(.defaultLow, for: .horizontal); importField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal); importField.font = .systemFont(ofSize: 13)
-        let row1 = hstack([label("Profile", size: 13, color: T.text, weight: .medium, wrap: false), profiles, flat("New…", #selector(newProfile)), flat("Open folder", #selector(openProfile)), importField, flat("Import code", #selector(importCode), primary: true)], spacing: 8)
-        search.placeholderString = "Search mods"; search.delegate = self; search.translatesAutoresizingMaskIntoConstraints = false; search.widthAnchor.constraint(greaterThanOrEqualToConstant: 160).isActive = true; search.setContentHuggingPriority(.defaultLow, for: .horizontal); search.setContentCompressionResistancePriority(.defaultLow, for: .horizontal); search.font = .systemFont(ofSize: 13)
-        installedOnly.target = self; installedOnly.action = #selector(doSearch); installedOnly.font = .systemFont(ofSize: 13); installedOnly.contentTintColor = T.text
-        modCount = label("", size: 12, color: T.muted, wrap: false)
-        let row2 = hstack([search, installedOnly, modCount, flat("Audit profile", #selector(auditProfile)), flat("Update all", #selector(updateMods))], spacing: 10)
-        table = NSTableView(); table.dataSource = self; table.delegate = self; table.rowHeight = 70; table.headerView = nil; table.backgroundColor = .clear; table.selectionHighlightStyle = .none; table.intercellSpacing = NSSize(width: 0, height: 0)
-        table.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("mod"))); table.columnAutoresizingStyle = .firstColumnOnlyAutoresizingStyle
-        let tscroll = NSScrollView(); tscroll.documentView = table; tscroll.hasVerticalScroller = true; tscroll.drawsBackground = false; tscroll.translatesAutoresizingMaskIntoConstraints = false
-        let stack = vstack([title, intro, row1, row2, tscroll], spacing: 12, insets: NSEdgeInsets(top: 48, left: 28, bottom: 16, right: 28))
-        stack.setCustomSpacing(6, after: title); fill(stack, in: page)
-        for v in [intro, row1, row2, tscroll] as [NSView] { v.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -56).isActive = true }
+        styledPopup(profiles); profiles.target = self; profiles.action = #selector(profileChanged)  // never shown: the chips below drive it
+        // search first, with a pull-down for the profile-wide actions
+        search.placeholderString = "Search Thunderstore"; search.delegate = self; search.controlSize = .large; search.font = .systemFont(ofSize: 14); search.translatesAutoresizingMaskIntoConstraints = false
+        search.heightAnchor.constraint(equalToConstant: 34).isActive = true; search.setContentHuggingPriority(.defaultLow, for: .horizontal); search.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let more = NSPopUpButton(frame: .zero, pullsDown: true); more.controlSize = .large; more.addItem(withTitle: "⋯"); more.translatesAutoresizingMaskIntoConstraints = false
+        for (t, sel) in [("Import profile code…", #selector(importCode)), ("Open profile folder", #selector(openProfile)), ("Update all", #selector(updateMods)), ("Audit profile", #selector(auditProfile)), ("New profile…", #selector(newProfile))] {
+            let it = NSMenuItem(title: t, action: sel, keyEquivalent: ""); it.target = self; more.menu?.addItem(it)
+        }
+        more.widthAnchor.constraint(equalToConstant: 54).isActive = true
+        let searchRow = hstack([search, more], spacing: 8)
+        modCount = label("", size: 12, color: T.muted, wrap: false); chipRow.trailing = modCount
+        let legend = NSTextField(labelWithAttributedString: { () -> NSAttributedString in
+            let s = NSMutableAttributedString(); let f = NSFont.systemFont(ofSize: 11)
+            for (t, c) in [("stripe: ", T.muted), ("green", T.ok), (" works on Mac · ", T.muted), ("amber", T.warn), (" visuals auto-fixed · ", T.muted), ("red", T.bad), (" needs porting", T.muted)] { s.append(NSAttributedString(string: t, attributes: [.font: f, .foregroundColor: c])) }
+            return s }()); legend.translatesAutoresizingMaskIntoConstraints = false; legend.lineBreakMode = .byTruncatingTail; legend.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let header = vstack([title, profileRow, searchRow, chipRow, legend], spacing: 12, insets: NSEdgeInsets(top: 48, left: 28, bottom: 0, right: 28))
+        header.setCustomSpacing(14, after: title); header.setCustomSpacing(8, after: chipRow)
+        for v in [profileRow, searchRow, chipRow, legend] as [NSView] { v.widthAnchor.constraint(equalTo: header.widthAnchor, constant: -56).isActive = true }
+        page.addSubview(header)
+        // grid of tiles + side panel
+        let layout = TileLayout(); layout.minimumInteritemSpacing = 12; layout.minimumLineSpacing = 12; layout.sectionInset = NSEdgeInsets(top: 4, left: 4, bottom: 4, right: 4); layout.itemSize = NSSize(width: 210, height: 150)
+        grid = NSCollectionView(); grid.collectionViewLayout = layout; grid.dataSource = self; grid.delegate = self; grid.backgroundColors = [.clear]; grid.isSelectable = false
+        grid.register(ModTileItem.self, forItemWithIdentifier: ModTileItem.id)
+        gridScroll = NSScrollView(); gridScroll.documentView = grid; gridScroll.hasVerticalScroller = true; gridScroll.drawsBackground = false; gridScroll.translatesAutoresizingMaskIntoConstraints = false
+        panel = buildPanel(); panel.isHidden = true
+        applyBar = buildApplyBar(); applyBar.isHidden = true
+        for v in [gridScroll, panel, applyBar] as [NSView] { page.addSubview(v) }
+        gridToEdge = gridScroll.trailingAnchor.constraint(equalTo: page.trailingAnchor, constant: -24)
+        gridToPanel = gridScroll.trailingAnchor.constraint(equalTo: panel.leadingAnchor, constant: -14)
+        bodyToPage = gridScroll.bottomAnchor.constraint(equalTo: page.bottomAnchor, constant: -14)
+        bodyToBar = gridScroll.bottomAnchor.constraint(equalTo: applyBar.topAnchor, constant: -10)
+        NSLayoutConstraint.activate([
+            header.leadingAnchor.constraint(equalTo: page.leadingAnchor), header.trailingAnchor.constraint(equalTo: page.trailingAnchor), header.topAnchor.constraint(equalTo: page.topAnchor),
+            gridScroll.leadingAnchor.constraint(equalTo: page.leadingAnchor, constant: 24), gridScroll.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 10), gridToEdge, bodyToPage,
+            panel.trailingAnchor.constraint(equalTo: page.trailingAnchor, constant: -28), panel.topAnchor.constraint(equalTo: gridScroll.topAnchor, constant: 4), panel.bottomAnchor.constraint(equalTo: gridScroll.bottomAnchor, constant: -4), panel.widthAnchor.constraint(equalToConstant: 300),
+            applyBar.leadingAnchor.constraint(equalTo: page.leadingAnchor, constant: 28), applyBar.trailingAnchor.constraint(equalTo: page.trailingAnchor, constant: -28), applyBar.bottomAnchor.constraint(equalTo: page.bottomAnchor, constant: -12),
+        ])
         return page
+    }
+
+    func buildPanel() -> NSView {
+        let card = Card()
+        let close = flat("✕", #selector(closePanel)); close.padding = 9
+        pName.preferredMaxLayoutWidth = 160; pName.maximumNumberOfLines = 3
+        let head = hstack([pIcon, vstack([pName, pOwner], spacing: 2)], spacing: 12); head.alignment = .top
+        for l in [pStats, pDesc, pVerdict, pNotes, pDeps] { l.preferredMaxLayoutWidth = 268 }
+        pDesc.textColor = T.text
+        let depsTitle = label("DEPENDENCIES", size: 11, color: T.muted, weight: .semibold, wrap: false)
+        let content = vstack([head, pStats, pCats, pDesc, pVerdict, pNotes, depsTitle, pDeps], spacing: 10, insets: NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16))
+        content.setCustomSpacing(14, after: head); content.setCustomSpacing(4, after: pVerdict); content.setCustomSpacing(16, after: pNotes); content.setCustomSpacing(4, after: depsTitle)
+        for v in [pStats, pCats, pDesc, pVerdict, pNotes, pDeps] as [NSView] { v.widthAnchor.constraint(equalToConstant: 268).isActive = true }
+        let doc = FlippedView(); doc.translatesAutoresizingMaskIntoConstraints = false; doc.addSubview(content)
+        NSLayoutConstraint.activate([content.leadingAnchor.constraint(equalTo: doc.leadingAnchor), content.trailingAnchor.constraint(equalTo: doc.trailingAnchor), content.topAnchor.constraint(equalTo: doc.topAnchor), content.bottomAnchor.constraint(equalTo: doc.bottomAnchor)])
+        let scroll = NSScrollView(); scroll.documentView = doc; scroll.hasVerticalScroller = true; scroll.autohidesScrollers = true; scroll.drawsBackground = false; scroll.translatesAutoresizingMaskIntoConstraints = false
+        pAction = flat("Install", #selector(panelAction), primary: true)
+        let buttons = hstack([pAction, flat("Open on Thunderstore", #selector(openThunderstore))], spacing: 8)
+        for v in [scroll, buttons, close] as [NSView] { card.addSubview(v) }
+        NSLayoutConstraint.activate([
+            scroll.leadingAnchor.constraint(equalTo: card.leadingAnchor), scroll.trailingAnchor.constraint(equalTo: card.trailingAnchor), scroll.topAnchor.constraint(equalTo: card.topAnchor, constant: 1), scroll.bottomAnchor.constraint(equalTo: buttons.topAnchor, constant: -10),
+            doc.widthAnchor.constraint(equalTo: scroll.widthAnchor),
+            buttons.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 16), buttons.trailingAnchor.constraint(lessThanOrEqualTo: card.trailingAnchor, constant: -16), buttons.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -14),
+            close.topAnchor.constraint(equalTo: card.topAnchor, constant: 12), close.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -12),
+        ])
+        return card
+    }
+
+    func buildApplyBar() -> NSView {
+        let bar = Card(fill: T.card2, radius: 10)
+        applyLabel = label("", size: 13, color: T.text, weight: .semibold, wrap: false)
+        let row = hstack([applyLabel, NSView(), flat("Discard", #selector(discardPending)), flat("Apply changes", #selector(applyPending), primary: true)], spacing: 8)
+        row.edgeInsets = NSEdgeInsets(top: 9, left: 16, bottom: 9, right: 10); fill(row, in: bar)
+        (row.arrangedSubviews[2] as? FlatButton)?.fill = T.card
+        return bar
     }
 
     func buildActivity() -> NSView {
@@ -315,6 +490,7 @@ final class Launcher: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
             else if let c = saved, names.contains(c) { pop.selectItem(withTitle: c) }
             else if names.contains("Default") { pop.selectItem(withTitle: "Default") }
         }
+        syncProfileChips()
     }
     func set(_ key: String, _ value: String, _ hint: String, _ color: NSColor) { guard let r = statusRows[key] else { return }; r.0.stringValue = value; r.0.textColor = color; r.1.stringValue = hint }
     func version() -> String {
@@ -356,7 +532,7 @@ final class Launcher: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
             let obj = try? JSONSerialization.jsonObject(with: data); DispatchQueue.main.async { completion(obj) }
         }
     }
-    func setBusy(_ b: Bool) { b ? spinner.startAnimation(nil) : spinner.stopAnimation(nil); for x in buttons where x.title != "Clear" && x.title != "Quit" { x.isEnabled = !b }; if !b { drawerLine.stringValue = "Done" }; table?.reloadData() }
+    func setBusy(_ b: Bool) { b ? spinner.startAnimation(nil) : spinner.stopAnimation(nil); for x in buttons where x.title != "Clear" && x.title != "Quit" { x.isEnabled = !b }; if !b { drawerLine.stringValue = "Done" }; refreshTiles() }
     func appendLog(_ s: String) {
         let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular), .foregroundColor: T.text]
         log.textStorage?.append(NSAttributedString(string: s, attributes: attrs)); log.scrollToEndOfDocument(nil)
@@ -399,52 +575,202 @@ final class Launcher: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
     }
 
     // MARK: mods
-    @objc func profileChanged() { UserDefaults.standard.set(profile, forKey: "lc.profile"); profilesHome.selectItem(withTitle: profile); reloadInstalled { self.table.reloadData() } }
+    @objc func profileChanged() {
+        UserDefaults.standard.set(profile, forKey: "lc.profile"); profilesHome.selectItem(withTitle: profile)
+        pendingInstall.removeAll(); pendingRemove.removeAll(); syncProfileChips()
+        reloadInstalled { self.afterInstalledChange() }
+    }
     @objc func profileChangedHome() { if let t = profilesHome.titleOfSelectedItem { profiles.selectItem(withTitle: t) }; profileChanged() }
+    @objc func profileChipClicked(_ sender: Pill) { guard sender.title != profile else { return }; profiles.selectItem(withTitle: sender.title); profileChanged() }
+    /// Rebuilds the profile chips from the hidden `profiles` popup (the source of truth shared with Home) when its items or selection change.
+    func syncProfileChips() {
+        let names = profiles.itemTitles, sig = names.joined(separator: "\u{1}") + "|" + profile
+        if sig == profileSig { return }; profileSig = sig
+        var v: [NSView] = [label("Profile", size: 13, color: T.text, weight: .medium, wrap: false)]
+        for n in names { let p = Pill(n, height: 26, target: self, action: #selector(profileChipClicked(_:))); p.active = n == profile; v.append(p) }
+        v.append(Pill("+ New", height: 26, target: self, action: #selector(newProfile)))
+        profileRow.views = v
+    }
     func reloadInstalled(_ done: (() -> Void)? = nil) {
         kitJSON(["mods", "json-installed", profile]) { obj in
             if let d = obj as? [String: Any] { self.installed = d["installed"] as? [String: String] ?? [:]; self.audit = d["audit"] as? [String: [String: Any]] ?? [:] }
             done?()
         }
     }
+    /// After installs/removes: the "Installed" view needs a new search, everything else just re-renders.
+    func afterInstalledChange() { if category == "Installed" { doSearch() } else { refreshTiles() } }
     func controlTextDidChange(_ n: Notification) { searchTimer?.invalidate(); searchTimer = Timer.scheduledTimer(withTimeInterval: 0.35, repeats: false) { _ in self.doSearch() } }
     @objc func doSearch() {
-        kitJSON(["mods", "json-search", search.stringValue]) { obj in
-            var list = (obj as? [[String: Any]]) ?? []
-            if self.installedOnly.state == .on { list = list.filter { self.installed[$0["full_name"] as? String ?? ""] != nil } }
-            self.results = list; self.modCount.stringValue = "\(list.count) mods"; self.table.reloadData()
+        searchSeq += 1; let seq = searchSeq
+        kitJSON(["mods", "json-search"] + (category == "Installed" ? ["--installed", profile] : []) + [search.stringValue]) { obj in
+            guard seq == self.searchSeq else { return }  // a newer search is in flight
+            self.allResults = (obj as? [[String: Any]]) ?? []; self.rebuildCategoryChips(); self.applyFilter()
         }
     }
-    func numberOfRows(in tableView: NSTableView) -> Int { results.count }
-    func tableView(_ tv: NSTableView, viewFor col: NSTableColumn?, row: Int) -> NSView? {
-        let cell = (tv.makeView(withIdentifier: NSUserInterfaceItemIdentifier("ModCell"), owner: nil) as? ModCell) ?? { let c = ModCell(frame: .zero); c.identifier = NSUserInterfaceItemIdentifier("ModCell"); return c }()
-        let r = results[row]; let full = r["full_name"] as? String ?? ""
-        cell.name.stringValue = r["name"] as? String ?? ""
-        let n = r["downloads"] as? Int ?? 0; let dl = n >= 1_000_000 ? String(format: "%.1fM", Double(n) / 1e6) : n >= 1000 ? String(format: "%.0fk", Double(n) / 1e3) : "\(n)"
-        cell.meta.stringValue = "by \(r["owner"] as? String ?? "")  ·  \(r["version"] as? String ?? "")  ·  \(dl) downloads"
-        cell.desc.stringValue = r["description"] as? String ?? ""
-        if let v = installed[full] {
-            let g = audit[full]?["group"] as? String
-            cell.badge.stringValue = (g == "ok" ? "✓ works" : g == "auto" ? "◐ auto-fixed" : g == "fix" ? "✗ needs work" : "● installed") + " · \(v)"
-            cell.badge.textColor = g == "fix" ? T.bad : g == "auto" ? T.warn : T.ok
-            cell.action.title = "Remove"; cell.action.fill = T.card2; cell.action.textColor = T.text
-        } else {
-            cell.badge.stringValue = ""; cell.action.title = "Install"; cell.action.fill = T.accent; cell.action.textColor = NSColor(srgbRed: 0.10, green: 0.05, blue: 0.02, alpha: 1)
+    func rebuildCategoryChips() {
+        var freq: [String: Int] = [:]
+        for r in allResults { for c in r["categories"] as? [String] ?? [] { freq[c, default: 0] += 1 } }
+        let cats = freq.sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }.prefix(10).map { $0.key }
+        let titles = ["All", "Installed"] + cats.filter { $0 != "All" && $0 != "Installed" }
+        if !titles.contains(category) { category = "All" }
+        chipRow.views = titles.map { t in let p = Pill(t, target: self, action: #selector(categoryClicked(_:))); p.active = t == category; return p }
+    }
+    @objc func categoryClicked(_ sender: Pill) {
+        let wasInstalled = category == "Installed"; category = sender.title
+        for case let p as Pill in chipRow.views { p.active = p.title == category }
+        if wasInstalled != (category == "Installed") { doSearch() } else { applyFilter() }
+    }
+    func applyFilter() {
+        results = category == "All" || category == "Installed" ? allResults : allResults.filter { ($0["categories"] as? [String] ?? []).contains(category) }
+        modCount.stringValue = results.count == 1 ? "1 mod" : "\(results.count) mods"; chipRow.needsLayout = true
+        grid.reloadData(); gridScroll.contentView.scroll(to: .zero); gridScroll.reflectScrolledClipView(gridScroll.contentView)
+        updateApplyBar()
+        if snapshotSelect, let f = results.first?["full_name"] as? String { snapshotSelect = false; selectMod(f) }
+    }
+
+    // tiles
+    func numberOfSections(in cv: NSCollectionView) -> Int { 1 }
+    func collectionView(_ cv: NSCollectionView, numberOfItemsInSection s: Int) -> Int { results.count }
+    func collectionView(_ cv: NSCollectionView, itemForRepresentedObjectAt ip: IndexPath) -> NSCollectionViewItem {
+        let item = cv.makeItem(withIdentifier: ModTileItem.id, for: ip) as! ModTileItem
+        if ip.item < results.count { configure(item.tile, results[ip.item]) }
+        return item
+    }
+    /// About 210 wide: as many columns as fit, stretched to fill the row so there is no ragged gap on the right.
+    func collectionView(_ cv: NSCollectionView, layout: NSCollectionViewLayout, sizeForItemAt ip: IndexPath) -> NSSize {
+        let avail = max(cv.bounds.width, gridScroll.contentView.bounds.width) - 8
+        let cols = max(1, floor((avail + 12) / 222)); return NSSize(width: floor((avail - 12 * (cols - 1)) / cols), height: 150)
+    }
+    func fmtDownloads(_ n: Int) -> String { n >= 1_000_000 ? String(format: "%.1fM", Double(n) / 1e6) : n >= 1000 ? String(format: "%.0fk", Double(n) / 1e3) : "\(n)" }
+    /// Mac verdict for a mod: stripe colour, headline and audit notes.
+    func verdict(_ full: String) -> (NSColor, String, [String]) {
+        guard installed[full] != nil else { return (T.line, "Not installed: the Mac audit runs after install", []) }
+        let a = audit[full], notes = a?["notes"] as? [String] ?? []
+        switch a?["group"] as? String {
+        case "auto": return (T.warn, "Visuals auto-fixed on Mac", notes)
+        case "fix": return (T.bad, "Needs porting work on Mac", notes)
+        case "ok": return (T.ok, "Works on Mac", notes)
+        default: return (T.ok, "Installed, no audit issues recorded", notes)
         }
-        cell.action.target = self; cell.action.tag = row; cell.action.isEnabled = process == nil; cell.action.refresh()
-        return cell
     }
-    @objc func cellAction(_ sender: NSButton) {
-        let row = sender.tag; guard row >= 0, row < results.count, let full = results[row]["full_name"] as? String else { return }
-        run(["mods", installed[full] != nil ? "remove" : "install", profile, full]) { self.reloadInstalled { self.table.reloadData() } }
+    func configure(_ tile: ModTileView, _ r: [String: Any]) {
+        let full = r["full_name"] as? String ?? ""
+        tile.name.stringValue = r["name"] as? String ?? ""
+        tile.meta.stringValue = "by \(r["owner"] as? String ?? "") · \(r["version"] as? String ?? "") · \(fmtDownloads(r["downloads"] as? Int ?? 0)) downloads"
+        tile.desc.stringValue = r["description"] as? String ?? ""
+        let inst = installed[full], pi = pendingInstall.contains(full), pr = pendingRemove.contains(full)
+        tile.check.state = (inst != nil && !pr) || pi ? .on : .off
+        tile.check.identifier = NSUserInterfaceItemIdentifier(full); tile.check.target = self; tile.check.action = #selector(tileChecked(_:))
+        if pi { tile.state.stringValue = "will install"; tile.state.textColor = T.accent }
+        else if pr { tile.state.stringValue = "will remove"; tile.state.textColor = T.bad }
+        else if let v = inst { tile.state.stringValue = "installed \(v)"; tile.state.textColor = T.ok }
+        else { tile.state.stringValue = "not installed"; tile.state.textColor = T.muted }
+        tile.stripe.layer?.backgroundColor = verdict(full).0.cgColor
+        tile.selected = selectedMod == full
+        tile.onClick = { [weak self] in self?.selectMod(full) }
+        if tile.iconKey != full { tile.iconKey = full; tile.icon.image = IconCache.shared.cached(full) }
+        if tile.icon.image == nil {
+            IconCache.shared.image(full, url: r["icon"] as? String ?? "") { [weak tile] img in if let t = tile, t.iconKey == full { t.icon.image = img } }
+        }
     }
+    @objc func tileChecked(_ b: NSButton) {
+        guard let full = b.identifier?.rawValue else { return }
+        if installed[full] != nil { if b.state == .on { pendingRemove.remove(full) } else { pendingRemove.insert(full) } }
+        else { if b.state == .on { pendingInstall.insert(full) } else { pendingInstall.remove(full) } }
+        refreshTiles()
+    }
+    /// Re-render visible tiles, the side panel and the apply bar in place (no reload, so scrolling and icons stay put).
+    func refreshTiles() {
+        guard grid != nil else { return }
+        for ip in grid.indexPathsForVisibleItems() where ip.item < results.count { if let it = grid.item(at: ip) as? ModTileItem { configure(it.tile, results[ip.item]) } }
+        updateApplyBar(); fillPanel()
+    }
+    func updateApplyBar() {
+        var parts: [String] = []
+        if !pendingInstall.isEmpty { parts.append("\(pendingInstall.count) to install") }
+        if !pendingRemove.isEmpty { parts.append("\(pendingRemove.count) to remove") }
+        applyLabel.stringValue = parts.joined(separator: " · ")
+        let show = !parts.isEmpty
+        if applyBar.isHidden == show { applyBar.isHidden = !show; bodyToPage.isActive = !show; bodyToBar.isActive = show }
+    }
+    @objc func discardPending() { pendingInstall.removeAll(); pendingRemove.removeAll(); refreshTiles() }
+    @objc func applyPending() {
+        if pendingInstall.isEmpty && pendingRemove.isEmpty { return }
+        var args = ["mods", "apply", profile]
+        if !pendingInstall.isEmpty { args += ["--install"] + pendingInstall.sorted() }
+        if !pendingRemove.isEmpty { args += ["--remove"] + pendingRemove.sorted() }
+        run(args) { self.pendingInstall.removeAll(); self.pendingRemove.removeAll(); self.reloadInstalled { self.afterInstalledChange() } }
+    }
+
+    // side panel
+    func selectMod(_ full: String?) {
+        selectedMod = full; selectedRecord = full.flatMap { f in results.first { $0["full_name"] as? String == f } ?? allResults.first { $0["full_name"] as? String == f } }
+        let open = full != nil
+        if panel.isHidden == open { panel.isHidden = !open; gridToEdge.isActive = !open; gridToPanel.isActive = open; grid.collectionViewLayout?.invalidateLayout() }
+        refreshTiles()
+        // the column count just changed: once laid out again, bring the selected tile into view
+        if let f = full, let i = results.firstIndex(where: { $0["full_name"] as? String == f }) {
+            DispatchQueue.main.async { self.grid.superview?.superview?.layoutSubtreeIfNeeded(); self.grid.scrollToItems(at: [IndexPath(item: i, section: 0)], scrollPosition: .nearestHorizontalEdge) }
+        }
+        guard let f = full else { return }
+        if infos[f] == nil {
+            kitJSON(["mods", "json-info", f]) { obj in
+                self.infos[f] = obj as? [String: Any] ?? ["error": "failed"]
+                if self.selectedMod == f { self.fillPanel() }  // ignore results for a tile that is no longer selected
+            }
+        }
+    }
+    @objc func closePanel() { selectMod(nil) }
+    func fillPanel() {
+        guard let r = selectedRecord, let full = selectedMod, !panel.isHidden else { return }
+        if pIconKey != full {
+            pIconKey = full; pIcon.image = IconCache.shared.cached(full)
+            if pIcon.image == nil { IconCache.shared.image(full, url: r["icon"] as? String ?? "") { img in if self.pIconKey == full { self.pIcon.image = img } } }
+        }
+        pName.stringValue = r["name"] as? String ?? ""; pOwner.stringValue = "by \(r["owner"] as? String ?? "")"
+        var stats = "Version \(r["version"] as? String ?? "?")  ·  \(fmtDownloads(r["downloads"] as? Int ?? 0)) downloads  ·  rating \(r["rating"] as? Int ?? 0)"
+        let info = infos[full]
+        if let d = info?["date_updated"] as? String, d.count >= 10 { stats += "  ·  updated \(d.prefix(10))" }
+        pStats.stringValue = stats
+        pCats.views = (r["categories"] as? [String] ?? []).map { Pill($0, height: 22, target: nil, action: nil) }
+        pCats.isHidden = pCats.views.isEmpty
+        pDesc.stringValue = r["description"] as? String ?? ""
+        let (color, headline, notes) = verdict(full)
+        pVerdict.stringValue = "● " + headline; pVerdict.textColor = color == T.line ? T.muted : color
+        pNotes.stringValue = notes.map { "• " + $0 }.joined(separator: "\n"); pNotes.isHidden = notes.isEmpty
+        if let deps = info?["dependencies"] as? [String] {
+            pDeps.stringValue = deps.isEmpty ? "None" : deps.map { d -> String in
+                let (n, v) = splitRef(d); return v.isEmpty ? n : "\(n)  \(v)" }.joined(separator: "\n")
+        } else { pDeps.stringValue = info == nil ? "Loading…" : "Unknown package" }
+        let inst = installed[full] != nil
+        pAction.title = inst ? "Remove" : "Install"; pAction.fill = inst ? T.card2 : T.accent; pAction.textColor = inst ? T.text : NSColor(srgbRed: 0.10, green: 0.05, blue: 0.02, alpha: 1)
+    }
+    /// "Author-Name-1.2.3" -> ("Author-Name", "1.2.3")
+    func splitRef(_ ref: String) -> (String, String) {
+        guard let i = ref.lastIndex(of: "-"), ref[ref.index(after: i)...].allSatisfy({ $0.isNumber || $0 == "." }) else { return (ref, "") }
+        return (String(ref[..<i]), String(ref[ref.index(after: i)...]))
+    }
+    @objc func panelAction() {
+        guard let f = selectedMod else { return }
+        run(["mods", installed[f] != nil ? "remove" : "install", profile, f]) { self.pendingInstall.remove(f); self.pendingRemove.remove(f); self.reloadInstalled { self.afterInstalledChange() } }
+    }
+    @objc func openThunderstore() {
+        guard let r = selectedRecord, let o = r["owner"] as? String, let n = r["name"] as? String, let u = URL(string: "https://thunderstore.io/c/lethal-company/p/\(o)/\(n)/") else { return }
+        NSWorkspace.shared.open(u)
+    }
+
+    // profile-wide actions (the "⋯" menu)
     @objc func importCode() {
-        let code = importField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let a = NSAlert(); a.messageText = "Import profile code"; a.informativeText = "Paste a Thunderstore / r2modman profile code. Its mods go into the \"\(profile)\" profile."
+        a.addButton(withTitle: "Import"); a.addButton(withTitle: "Cancel")
+        let f = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24)); f.placeholderString = "Profile code"; a.accessoryView = f; a.window.initialFirstResponder = f
+        guard a.runModal() == .alertFirstButtonReturn else { return }
+        let code = f.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         if code.isEmpty { appendLog("Paste a profile code first.\n"); setDrawer(true); return }
-        run(["mods", "import", profile, code]) { self.importField.stringValue = ""; self.reloadInstalled { self.doSearch() } }
+        run(["mods", "import", profile, code]) { self.reloadInstalled { self.doSearch() } }
     }
-    @objc func auditProfile() { run(["mods", "audit", profile]) { self.reloadInstalled { self.table.reloadData() } } }
-    @objc func updateMods() { run(["mods", "update", profile]) { self.reloadInstalled { self.table.reloadData() } } }
+    @objc func auditProfile() { run(["mods", "audit", profile]) { self.reloadInstalled { self.refreshTiles() } } }
+    @objc func updateMods() { run(["mods", "update", profile]) { self.reloadInstalled { self.afterInstalledChange() } } }
     @objc func openProfile() { let d = support.appendingPathComponent("profiles/\(profile)/BepInEx"); try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true); NSWorkspace.shared.open(d) }
     @objc func newProfile() {
         let a = NSAlert(); a.messageText = "New mod profile"; a.informativeText = "Name for the new profile:"; a.addButton(withTitle: "Create"); a.addButton(withTitle: "Cancel")
