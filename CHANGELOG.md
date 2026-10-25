@@ -5,7 +5,17 @@ Format: [Keep a Changelog](https://keepachangelog.com). Versions follow the laun
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-25
+
 ### Added
+- Launcher app with Build / Update, Play and Play modded; menu-driven, no setup beyond Steam and Unity Hub.
+- Full build pipeline: Steam ownership check, asset extraction, Unity package restore, Metal shader build, install
+  to Applications with the game's icon.
+- macOS replacements for Windows-only parts: Steamworks compatibility layer, Opus and voice-capture plugins,
+  Discord SDK, replacement full-screen effects.
+- Mod support: BepInEx, a native Thunderstore mod manager with profile share codes, a per-mod compatibility audit,
+  and the MacShaderFix runtime plugin that remaps mod materials to Metal shaders.
+- Game update detection against Steam's public build.
 - Unity setup without manual steps: Build (and `setup`) installs Unity Hub from Unity's official disk image, opens it for a one-time sign-in and waits for the licence, then installs the editor. `check-unity` reports Hub, sign-in and editor for the Home status grid.
 - Add to Steam: registers the native and modded apps as Steam shortcuts so Play launches through Steam and the real Steam overlay works (`steam-shortcut`, launcher button).
 - `net-fix` / `net-verify`: restore and check the original network prefab hashes in the installed app.
@@ -22,18 +32,6 @@ Format: [Keep a Changelog](https://keepachangelog.com). Versions follow the laun
 
 ### Fixed
 - Joining Windows hosts: the native build carried regenerated NetworkObject hashes, so Netcode rejected the client without a reason. Builds now restore the original hashes after the Unity build.
-
-## [0.1.0] - 2026-10-25
-
-### Added
-- Launcher app with Build / Update, Play and Play modded; menu-driven, no setup beyond Steam and Unity Hub.
-- Full build pipeline: Steam ownership check, asset extraction, Unity package restore, Metal shader build, install
-  to Applications with the game's icon.
-- macOS replacements for Windows-only parts: Steamworks compatibility layer, Opus and voice-capture plugins,
-  Discord SDK, replacement full-screen effects.
-- Mod support: BepInEx, a native Thunderstore mod manager with profile share codes, a per-mod compatibility audit,
-  and the MacShaderFix runtime plugin that remaps mod materials to Metal shaders.
-- Game update detection against Steam's public build.
 
 ### Known issues
 - Water, grass, fur, hologram, blob shaders and the posterize effect are approximations.
