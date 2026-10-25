@@ -105,7 +105,11 @@ def assemble(proj, game_dir, editor_app, natives_dir):
             if name in builtin and builtin[name][1] not in pkgdirs: pkgdirs.append(builtin[name][1])
     with Step("remap MonoScript references to package scripts"):
         remap.run(proj, os.path.join(config.WORK, "replaced_dlls.json"), pkgdirs)
-    with Step("enable the game's precompiled assemblies for the Editor (AssetRipper disables them)"):
+    with Step("use the game's original assemblies byte-for-byte (AssetRipper re-saves them) and enable them for the Editor"):
+        managed = glob.glob(os.path.join(game_dir, "*_Data", "Managed"))[0]
+        for dll in glob.glob(os.path.join(plugins, "*.dll")):
+            src = os.path.join(managed, os.path.basename(dll))
+            if os.path.exists(src): shutil.copy2(src, dll)
         for meta in glob.glob(os.path.join(plugins, "*.dll.meta")):
             if meta.endswith("Facepunch.Steamworks.Posix.dll.meta"): continue
             g = _guid(meta)  # read before truncating
