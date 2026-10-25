@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import WebKit
 
 // Native launcher window styled like a web app: sidebar navigation, banner header, rounded cards, a grid of mod tiles,
 // collapsible log drawer. Every action runs the Python kit ("python3 -m lcport ...") in the kit folder next to this
@@ -34,17 +35,31 @@ final class Card: NSView {
 final class FlatButton: NSButton {
     var fill: NSColor = T.accent { didSet { refresh() } }
     var textColor: NSColor = NSColor(srgbRed: 0.10, green: 0.05, blue: 0.02, alpha: 1) { didSet { refresh() } }
+    /// Outlined variant: transparent fill, 1pt accent border, accent text (the tiles' "Undo").
+    var outline = false { didSet { refresh() } }
     var padding: CGFloat = 10
     var heightConstraint: NSLayoutConstraint!
+    enum Style { case primary, secondary, outline }
     /// 26pt pill, 12pt medium; `bold` (primary actions) uses semibold. Callers may raise the height and font (the hero Play does).
-    convenience init(_ title: String, fill: NSColor, text: NSColor, bold: Bool = false, target: AnyObject?, action: Selector) {
+    convenience init(_ title: String, fill: NSColor, text: NSColor, bold: Bool = false, target: AnyObject?, action: Selector?) {
         self.init(frame: .zero); self.title = title; self.fill = fill; self.textColor = text; self.target = target; self.action = action
         isBordered = false; wantsLayer = true; layer?.cornerRadius = 7; font = .systemFont(ofSize: 12, weight: bold ? .semibold : .medium)
         translatesAutoresizingMaskIntoConstraints = false; heightConstraint = heightAnchor.constraint(equalToConstant: 26); heightConstraint.isActive = true
         setContentCompressionResistancePriority(.required, for: .horizontal); setContentHuggingPriority(.defaultHigh, for: .horizontal); refresh()
     }
+    /// Primary: accent fill, dark semibold text. Secondary: T.card2 fill, light text. Outline: see `outline`.
+    func setStyle(_ s: Style) {
+        let size = font?.pointSize ?? 12
+        switch s {
+        case .primary: outline = false; fill = T.accent; textColor = NSColor(srgbRed: 0.10, green: 0.05, blue: 0.02, alpha: 1); font = .systemFont(ofSize: size, weight: .semibold)
+        case .secondary: outline = false; fill = T.card2; textColor = T.text; font = .systemFont(ofSize: size, weight: .medium)
+        case .outline: outline = true; textColor = T.accent; font = .systemFont(ofSize: size, weight: .semibold)
+        }
+        refresh()
+    }
     func refresh() {
-        layer?.backgroundColor = (isEnabled ? fill : fill.withAlphaComponent(0.4)).cgColor
+        layer?.backgroundColor = outline ? NSColor.clear.cgColor : (isEnabled ? fill : fill.withAlphaComponent(0.4)).cgColor
+        layer?.borderWidth = outline ? 1 : 0; layer?.borderColor = (isEnabled ? T.accent : T.accent.withAlphaComponent(0.4)).cgColor
         let p = NSMutableParagraphStyle(); p.alignment = .center
         let t = NSMutableAttributedString(string: title, attributes: [.foregroundColor: isEnabled ? textColor : textColor.withAlphaComponent(0.6), .font: font!, .paragraphStyle: p])
         if title.hasSuffix("▾") { t.addAttribute(.foregroundColor, value: T.muted, range: NSRange(location: (title as NSString).length - 1, length: 1)) }  // dropdown chevron
@@ -101,7 +116,7 @@ final class SegSwitch: NSView {
 }
 
 // MARK: - mods page pieces
-/// Rounded toggle pill used for profile chips, category chips and the side panel's category tags.
+/// Rounded toggle pill used for profile chips and category chips.
 final class Pill: NSButton {
     var active = false { didSet { refresh() } }
     var pillHeight: CGFloat = 24
@@ -172,7 +187,7 @@ final class IconCache {
             for cb in self.waiting.removeValue(forKey: key) ?? [] { cb(img) }
         }
     }
-    /// Thumbnail at 2x the largest size shown (56pt in the side panel), so 300 tiles stay light in memory.
+    /// Thumbnail at 2x the largest size shown (48pt in the mod sheet; 56pt leaves headroom), so 300 tiles stay light in memory.
     static func decode(_ data: Data) -> NSImage? {
         guard let src = CGImageSourceCreateWithData(data as CFData, nil),
               let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: 112, kCGImageSourceCreateThumbnailWithTransform: true] as CFDictionary) else { return nil }
@@ -186,12 +201,33 @@ func roundedIcon(_ size: CGFloat) -> NSImageView {
     v.widthAnchor.constraint(equalToConstant: size).isActive = true; v.heightAnchor.constraint(equalToConstant: size).isActive = true; return v
 }
 
+/// Small bordered capsule for the mod sheet's chip row: optional coloured dot, then the text.
+final class TagChip: NSView {
+    let label = NSTextField(labelWithString: "")
+    let height: CGFloat
+    init(_ text: String, dot: NSColor? = nil, height: CGFloat = 24) {
+        self.height = height; super.init(frame: NSRect(x: 0, y: 0, width: 10, height: height)); wantsLayer = true
+        layer?.cornerRadius = height / 2; layer?.borderWidth = 1; layer?.borderColor = T.card2.cgColor; layer?.backgroundColor = NSColor(white: 0, alpha: 0.15).cgColor
+        let s = NSMutableAttributedString(), f = NSFont.systemFont(ofSize: 12, weight: .medium)
+        if let d = dot { s.append(NSAttributedString(string: "●  ", attributes: [.font: NSFont.systemFont(ofSize: 10), .foregroundColor: d])) }
+        s.append(NSAttributedString(string: text, attributes: [.font: f, .foregroundColor: T.text])); label.attributedStringValue = s
+        label.isSelectable = false; addSubview(label)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override var intrinsicContentSize: NSSize { NSSize(width: ceil(label.cell?.cellSize.width ?? 40) + 22, height: height) }
+    override func layout() { super.layout(); let s = label.cell?.cellSize ?? .zero; label.frame = NSRect(x: 11, y: floor((bounds.height - s.height) / 2), width: ceil(s.width), height: ceil(s.height)) }
+}
+
 final class ModTileView: NSView {
     let card = Card(fill: T.card, radius: 10), stripe = NSView(), icon = roundedIcon(36)
     let name = NSTextField(labelWithString: ""), meta = NSTextField(wrappingLabelWithString: ""), desc = NSTextField(wrappingLabelWithString: ""), state = NSTextField(labelWithString: "")
-    let check = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    /// Install (primary) / Remove (secondary) / Undo (outline): queues or clears a pending change; Apply in the bottom bar runs them.
+    let action = FlatButton("Install", fill: T.accent, text: T.text, bold: true, target: nil, action: nil)
     var iconKey = "", onClick: (() -> Void)?
-    var selected = false { didSet { card.layer?.borderColor = (selected ? T.accent : T.line).cgColor; card.layer?.borderWidth = selected ? 2 : 1 } }
+    /// Open in the mod sheet: 2pt accent border. A queued change: 1pt accent border.
+    var selected = false { didSet { border() } }
+    var pending = false { didSet { border() } }
+    func border() { card.layer?.borderColor = (selected || pending ? T.accent : T.line).cgColor; card.layer?.borderWidth = selected ? 2 : 1 }
     override init(frame: NSRect) {
         super.init(frame: frame)
         card.layer?.masksToBounds = true; addSubview(card)
@@ -201,8 +237,8 @@ final class ModTileView: NSView {
         desc.font = .systemFont(ofSize: 11.5); desc.textColor = T.muted; desc.maximumNumberOfLines = 2; desc.cell?.truncatesLastVisibleLine = true
         state.font = .systemFont(ofSize: 11.5, weight: .medium); state.lineBreakMode = .byTruncatingTail
         for v in [name, meta, desc, state] { v.isSelectable = false; v.setContentCompressionResistancePriority(.defaultLow, for: .horizontal) }
-        check.translatesAutoresizingMaskIntoConstraints = false
-        for v in [stripe, icon, name, meta, desc, state, check] as [NSView] { v.translatesAutoresizingMaskIntoConstraints = false; card.addSubview(v) }
+        action.font = .systemFont(ofSize: 11.5, weight: .semibold); action.heightConstraint.constant = 24; action.padding = 11
+        for v in [stripe, icon, name, meta, desc, state, action] as [NSView] { v.translatesAutoresizingMaskIntoConstraints = false; card.addSubview(v) }
         NSLayoutConstraint.activate([
             card.leadingAnchor.constraint(equalTo: leadingAnchor), card.trailingAnchor.constraint(equalTo: trailingAnchor), card.topAnchor.constraint(equalTo: topAnchor), card.bottomAnchor.constraint(equalTo: bottomAnchor),
             stripe.leadingAnchor.constraint(equalTo: card.leadingAnchor), stripe.topAnchor.constraint(equalTo: card.topAnchor), stripe.bottomAnchor.constraint(equalTo: card.bottomAnchor), stripe.widthAnchor.constraint(equalToConstant: 3),
@@ -210,18 +246,26 @@ final class ModTileView: NSView {
             name.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 10), name.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -12), name.topAnchor.constraint(equalTo: card.topAnchor, constant: 11),
             meta.leadingAnchor.constraint(equalTo: name.leadingAnchor), meta.trailingAnchor.constraint(equalTo: name.trailingAnchor), meta.topAnchor.constraint(equalTo: name.bottomAnchor, constant: 1), meta.heightAnchor.constraint(equalToConstant: 28),
             desc.leadingAnchor.constraint(equalTo: icon.leadingAnchor), desc.trailingAnchor.constraint(equalTo: name.trailingAnchor), desc.topAnchor.constraint(equalTo: card.topAnchor, constant: 60), desc.heightAnchor.constraint(equalToConstant: 30),
-            check.leadingAnchor.constraint(equalTo: icon.leadingAnchor), check.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -11),
-            state.leadingAnchor.constraint(equalTo: check.trailingAnchor, constant: 2), state.centerYAnchor.constraint(equalTo: check.centerYAnchor), state.trailingAnchor.constraint(lessThanOrEqualTo: card.trailingAnchor, constant: -12),
+            action.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -12), action.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -10),
+            state.leadingAnchor.constraint(equalTo: icon.leadingAnchor), state.centerYAnchor.constraint(equalTo: action.centerYAnchor), state.trailingAnchor.constraint(lessThanOrEqualTo: action.leadingAnchor, constant: -8),
         ])
-        selected = false
+        border()
     }
     required init?(coder: NSCoder) { fatalError() }
-    /// Everything but the checkbox counts as the tile body, so a click anywhere else selects the tile.
+    /// Everything but the button counts as the tile body, so a click anywhere else opens the mod sheet.
     override func hitTest(_ p: NSPoint) -> NSView? {
         guard let v = super.hitTest(p) else { return nil }
-        return v === check || v.isDescendant(of: check) ? v : self
+        return v === action || v.isDescendant(of: action) ? v : self
     }
     override func mouseDown(with e: NSEvent) { onClick?() }
+}
+
+/// The mod sheet's backdrop: a 45% black layer over the whole Mods page. A click outside the card closes the sheet;
+/// scrolling stays out of the grid underneath.
+final class SheetOverlay: NSView {
+    var onClose: (() -> Void)?; weak var card: NSView?
+    override func mouseDown(with e: NSEvent) { let p = convert(e.locationInWindow, from: nil); if let c = card, c.frame.contains(p) { return }; onClose?() }
+    override func scrollWheel(with e: NSEvent) {}
 }
 
 final class ModTileItem: NSCollectionViewItem {
@@ -230,14 +274,14 @@ final class ModTileItem: NSCollectionViewItem {
     var tile: ModTileView { view as! ModTileView }
 }
 
-/// Flow layout that recomputes tile widths whenever the grid width changes (the side panel opening, window resizes).
+/// Flow layout that recomputes tile widths whenever the grid width changes (window resizes).
 final class TileLayout: NSCollectionViewFlowLayout {
     private var lastWidth: CGFloat = 0
     override func shouldInvalidateLayout(forBoundsChange b: NSRect) -> Bool { if b.width != lastWidth { lastWidth = b.width; return true }; return false }
 }
 
 // MARK: - launcher
-final class Launcher: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NSCollectionViewDelegateFlowLayout, NSSearchFieldDelegate {
+final class Launcher: NSObject, NSApplicationDelegate, NSCollectionViewDataSource, NSCollectionViewDelegateFlowLayout, NSSearchFieldDelegate, WKNavigationDelegate {
     let kit: URL
     let support = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/LethalCompanyMac")
     var window: NSWindow!
@@ -246,12 +290,15 @@ final class Launcher: NSObject, NSApplicationDelegate, NSCollectionViewDataSourc
     var modeSwitch: SegSwitch!, playButton: FlatButton!, launcherUpdate: Bool?, launcherChecked = false, launcherNoRelease = false
     var profilesHome: FlatButton!, profiles = NSPopUpButton(), search = NSSearchField()  // `profiles` is hidden: the Mods page's chips select into it
     var profileRow = ChipRow(height: 26, spacing: 8), chipRow = ChipRow(height: 24), modCount = NSTextField(labelWithString: ""), profileSig = ""
-    var grid: NSCollectionView!, gridScroll: NSScrollView!, gridToEdge: NSLayoutConstraint!, gridToPanel: NSLayoutConstraint!, bodyToPage: NSLayoutConstraint!, bodyToBar: NSLayoutConstraint!
+    var grid: NSCollectionView!, gridScroll: NSScrollView!, bodyToPage: NSLayoutConstraint!, bodyToBar: NSLayoutConstraint!
     var applyBar: NSView!, applyProg: NSProgressIndicator!, modsBusy = false, applyLabel = NSTextField(labelWithString: ""), pendingInstall = Set<String>(), pendingRemove = Set<String>()
-    var panel: NSView!, pAction: FlatButton!, pIcon = roundedIcon(56), pIconKey = "", selectedMod: String?, selectedRecord: [String: Any]?, infos: [String: [String: Any]] = [:]
-    var pCats = ChipRow(height: 22)
-    lazy var pName = label("", size: 16, color: T.text, weight: .bold); lazy var pOwner = label("", size: 12, color: T.muted, wrap: false); lazy var pStats = label("", size: 12, color: T.muted)
-    lazy var pDesc = label("", size: 12.5); lazy var pVerdict = label("", size: 12.5, weight: .semibold); lazy var pNotes = label("", size: 11.5); lazy var pDeps = label("", size: 12, color: T.text)
+    // mod sheet (opened by clicking a tile): header, chips, actions, then the README in a web view
+    var sheet: SheetOverlay!, sAction: FlatButton!, sIcon = roundedIcon(48), sIconKey = "", selectedMod: String?, selectedRecord: [String: Any]?, infos: [String: [String: Any]] = [:]
+    var sChips = ChipRow(height: 24, spacing: 6), sWeb: WKWebView!, sNav: WKNavigation?, readmes: [String: [String: Any]] = [:], readmeShown: String?
+    lazy var sName = label("", size: 16, color: T.text, weight: .bold, wrap: false); lazy var sMeta = label("", size: 12, color: T.muted, wrap: false)
+    lazy var sNote = label("", size: 12, color: T.muted, weight: .medium, wrap: false); lazy var sLoading = label("Loading README…", size: 13, color: T.muted, wrap: false)
+    lazy var sNoReadme = label("No README available.", size: 13, color: T.text, weight: .semibold, wrap: false); lazy var sFallbackDesc = label("", size: 12.5)
+    var sFallback: NSStackView!
     var log: NSTextView!, logScroll: NSScrollView!, logHeight: NSLayoutConstraint!, drawerLine = NSTextField(labelWithString: "Ready"), drawerArrow = NSTextField(labelWithString: "▸"), spinner: NSProgressIndicator!, drawerOpen = false
     // human task status (driven by the kit's "##status / ##progress / ##done / ##fail" lines, which stay out of the log)
     enum TaskState { case idle, busy, done, fail }
@@ -261,7 +308,7 @@ final class Launcher: NSObject, NSApplicationDelegate, NSCollectionViewDataSourc
     var buttons: [NSButton] = []
     var process: Process?
     var allResults: [[String: Any]] = [], results: [[String: Any]] = [], installed: [String: String] = [:], audit: [String: [String: Any]] = [:], category = "All"
-    var searchTimer: Timer?, searchSeq = 0, snapshotSelect = false
+    var searchTimer: Timer?, searchSeq = 0, snapshotSelect = false, snapshotPending = false, snapshotSheetPath: String?
 
     override init() { kit = Bundle.main.bundleURL.deletingLastPathComponent(); super.init() }
 
@@ -302,12 +349,19 @@ final class Launcher: NSObject, NSApplicationDelegate, NSCollectionViewDataSourc
                 self.openProfileMenu()
             }
         }
-        if let path = ProcessInfo.processInfo.environment["LC_SNAPSHOT"], ProcessInfo.processInfo.environment["LC_SNAPSHOT_MENU"] != "1" {
-            if let tab = ProcessInfo.processInfo.environment["LC_SNAPSHOT_TAB"] { show(tab) }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 9) { self.snapshot(to: path); NSApp.terminate(nil) }
+        let env = ProcessInfo.processInfo.environment, sheetShot = env["LC_SNAPSHOT_SELECT"] == "1"
+        if let path = env["LC_SNAPSHOT"], env["LC_SNAPSHOT_MENU"] != "1" {
+            if let tab = env["LC_SNAPSHOT_TAB"] { show(tab) }
+            if sheetShot {  // the sheet's README decides when: 4 s after it finished loading (or at the latest after 60 s)
+                snapshotSheetPath = path
+                DispatchQueue.main.asyncAfter(deadline: .now() + 60) { self.snapshot(to: path); NSApp.terminate(nil) }
+            } else { DispatchQueue.main.asyncAfter(deadline: .now() + 9) { self.snapshot(to: path); NSApp.terminate(nil) } }
         }
-        if ProcessInfo.processInfo.environment["LC_SNAPSHOT_SELECT"] == "1" {  // open the side panel on the first tile (or as soon as results arrive)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 7) { if let f = self.results.first?["full_name"] as? String { self.selectMod(f) } else { self.snapshotSelect = true } }
+        if sheetShot {  // open the mod sheet (MoreCompany, else the first tile) as soon as results are there
+            DispatchQueue.main.asyncAfter(deadline: .now() + 7) { self.show("mods"); if let f = self.snapshotSheetMod() { self.openSheet(f) } else { self.snapshotSelect = true } }
+        }
+        if env["LC_SNAPSHOT_PENDING"] == "1" {  // review the tile states: one queued install and one queued remove, no busy state
+            DispatchQueue.main.asyncAfter(deadline: .now() + 6) { self.show("mods"); if !self.results.isEmpty { self.injectPending() } else { self.snapshotPending = true } }
         }
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ s: NSApplication) -> Bool { true }
@@ -464,51 +518,66 @@ final class Launcher: NSObject, NSApplicationDelegate, NSCollectionViewDataSourc
         header.setCustomSpacing(14, after: title); header.setCustomSpacing(8, after: chipRow)
         for v in [profileRow, searchRow, chipRow, legend] as [NSView] { v.widthAnchor.constraint(equalTo: header.widthAnchor, constant: -56).isActive = true }
         page.addSubview(header)
-        // grid of tiles + side panel
+        // grid of tiles; the mod sheet lies over the whole page when open
         let layout = TileLayout(); layout.minimumInteritemSpacing = 12; layout.minimumLineSpacing = 12; layout.sectionInset = NSEdgeInsets(top: 4, left: 4, bottom: 4, right: 4); layout.itemSize = NSSize(width: 210, height: 150)
         grid = NSCollectionView(); grid.collectionViewLayout = layout; grid.dataSource = self; grid.delegate = self; grid.backgroundColors = [.clear]; grid.isSelectable = false
         grid.register(ModTileItem.self, forItemWithIdentifier: ModTileItem.id)
         gridScroll = NSScrollView(); gridScroll.documentView = grid; gridScroll.hasVerticalScroller = true; gridScroll.drawsBackground = false; gridScroll.translatesAutoresizingMaskIntoConstraints = false
-        panel = buildPanel(); panel.isHidden = true
         applyBar = buildApplyBar(); applyBar.isHidden = true
-        for v in [gridScroll, panel, applyBar] as [NSView] { page.addSubview(v) }
-        gridToEdge = gridScroll.trailingAnchor.constraint(equalTo: page.trailingAnchor, constant: -24)
-        gridToPanel = gridScroll.trailingAnchor.constraint(equalTo: panel.leadingAnchor, constant: -14)
+        for v in [gridScroll, applyBar] as [NSView] { page.addSubview(v) }
         bodyToPage = gridScroll.bottomAnchor.constraint(equalTo: page.bottomAnchor, constant: -14)
         bodyToBar = gridScroll.bottomAnchor.constraint(equalTo: applyBar.topAnchor, constant: -10)
         NSLayoutConstraint.activate([
             header.leadingAnchor.constraint(equalTo: page.leadingAnchor), header.trailingAnchor.constraint(equalTo: page.trailingAnchor), header.topAnchor.constraint(equalTo: page.topAnchor),
-            gridScroll.leadingAnchor.constraint(equalTo: page.leadingAnchor, constant: 24), gridScroll.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 10), gridToEdge, bodyToPage,
-            panel.trailingAnchor.constraint(equalTo: page.trailingAnchor, constant: -28), panel.topAnchor.constraint(equalTo: gridScroll.topAnchor, constant: 4), panel.bottomAnchor.constraint(equalTo: gridScroll.bottomAnchor, constant: -4), panel.widthAnchor.constraint(equalToConstant: 300),
+            gridScroll.leadingAnchor.constraint(equalTo: page.leadingAnchor, constant: 24), gridScroll.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 10),
+            gridScroll.trailingAnchor.constraint(equalTo: page.trailingAnchor, constant: -24), bodyToPage,
             applyBar.leadingAnchor.constraint(equalTo: page.leadingAnchor, constant: 28), applyBar.trailingAnchor.constraint(equalTo: page.trailingAnchor, constant: -28), applyBar.bottomAnchor.constraint(equalTo: page.bottomAnchor, constant: -12),
         ])
+        sheet = buildSheet(); sheet.isHidden = true; fill(sheet, in: page)  // added last: above the grid, the header and the bar
         return page
     }
 
-    func buildPanel() -> NSView {
-        let card = Card()
-        let close = flat("✕", #selector(closePanel)); close.padding = 9
-        pName.preferredMaxLayoutWidth = 160; pName.maximumNumberOfLines = 3
-        let head = hstack([pIcon, vstack([pName, pOwner], spacing: 2)], spacing: 12); head.alignment = .top
-        for l in [pStats, pDesc, pVerdict, pNotes, pDeps] { l.preferredMaxLayoutWidth = 268 }
-        pDesc.textColor = T.text
-        let depsTitle = label("DEPENDENCIES", size: 11, color: T.muted, weight: .semibold, wrap: false)
-        let content = vstack([head, pStats, pCats, pDesc, pVerdict, pNotes, depsTitle, pDeps], spacing: 10, insets: NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16))
-        content.setCustomSpacing(14, after: head); content.setCustomSpacing(4, after: pVerdict); content.setCustomSpacing(16, after: pNotes); content.setCustomSpacing(4, after: depsTitle)
-        for v in [pStats, pCats, pDesc, pVerdict, pNotes, pDeps] as [NSView] { v.widthAnchor.constraint(equalToConstant: 268).isActive = true }
-        let doc = FlippedView(); doc.translatesAutoresizingMaskIntoConstraints = false; doc.addSubview(content)
-        NSLayoutConstraint.activate([content.leadingAnchor.constraint(equalTo: doc.leadingAnchor), content.trailingAnchor.constraint(equalTo: doc.trailingAnchor), content.topAnchor.constraint(equalTo: doc.topAnchor), content.bottomAnchor.constraint(equalTo: doc.bottomAnchor)])
-        let scroll = NSScrollView(); scroll.documentView = doc; scroll.hasVerticalScroller = true; scroll.autohidesScrollers = true; scroll.drawsBackground = false; scroll.translatesAutoresizingMaskIntoConstraints = false
-        pAction = flat("Install", #selector(panelAction), primary: true)
-        let buttons = hstack([pAction, flat("Open on Thunderstore", #selector(openThunderstore))], spacing: 8)
-        for v in [scroll, buttons, close] as [NSView] { card.addSubview(v) }
+    /// The mod sheet: a dimmed backdrop over the Mods page and a card (inset 24pt, at most 760pt wide) with the mod's header,
+    /// chips (Mac verdict, categories, dependencies), Install / Remove and Thunderstore buttons, and the README below a separator.
+    func buildSheet() -> SheetOverlay {
+        let overlay = SheetOverlay(); overlay.wantsLayer = true; overlay.layer?.backgroundColor = NSColor(white: 0, alpha: 0.45).cgColor
+        overlay.onClose = { [weak self] in self?.closeSheet() }
+        let card = Card(fill: T.card, radius: 12); overlay.card = card; overlay.addSubview(card)
+        card.layer?.shadowColor = NSColor.black.cgColor; card.layer?.shadowOpacity = 0.55; card.layer?.shadowRadius = 24; card.layer?.shadowOffset = CGSize(width: 0, height: -10)
+        let clip = NSView(); clip.wantsLayer = true; clip.layer?.cornerRadius = 12; clip.layer?.masksToBounds = true; fill(clip, in: card)  // rounds the web view's corners
+        // the "✕", Install / Remove and Thunderstore buttons stay usable while a task runs, so they are not in `buttons`
+        let close = FlatButton("✕", fill: T.card2, text: T.text, target: self, action: #selector(closeSheet)); close.padding = 9
+        sAction = FlatButton("Install", fill: T.accent, text: T.text, bold: true, target: self, action: #selector(sheetAction))
+        let thunder = FlatButton("Open on Thunderstore", fill: T.card2, text: T.text, target: self, action: #selector(openThunderstore))
+        sName.font = .systemFont(ofSize: 16, weight: .bold)
+        let titles = vstack([sName, sMeta], spacing: 3)
+        let head = hstack([sIcon, titles], spacing: 12); head.alignment = .centerY
+        let actions = hstack([sAction, thunder, sNote], spacing: 8); actions.setCustomSpacing(14, after: thunder)
+        let sep = NSView(); sep.wantsLayer = true; sep.layer?.backgroundColor = T.line.cgColor; sep.translatesAutoresizingMaskIntoConstraints = false
+        let cfg = WKWebViewConfiguration(); cfg.defaultWebpagePreferences.allowsContentJavaScript = false  // the page also carries a no-script CSP
+        sWeb = WKWebView(frame: .zero, configuration: cfg); sWeb.navigationDelegate = self; sWeb.translatesAutoresizingMaskIntoConstraints = false; sWeb.isHidden = true
+        sWeb.underPageBackgroundColor = T.card
+        sFallbackDesc.textColor = T.muted; sFallback = vstack([sNoReadme, sFallbackDesc], spacing: 6); sFallback.isHidden = true
+        for v in [head, close, sChips, actions, sep, sWeb, sLoading, sFallback] as [NSView] { v.translatesAutoresizingMaskIntoConstraints = false; clip.addSubview(v) }
+        let wide = card.widthAnchor.constraint(equalTo: overlay.widthAnchor, constant: -48); wide.priority = .defaultHigh
         NSLayoutConstraint.activate([
-            scroll.leadingAnchor.constraint(equalTo: card.leadingAnchor), scroll.trailingAnchor.constraint(equalTo: card.trailingAnchor), scroll.topAnchor.constraint(equalTo: card.topAnchor, constant: 1), scroll.bottomAnchor.constraint(equalTo: buttons.topAnchor, constant: -10),
-            doc.widthAnchor.constraint(equalTo: scroll.widthAnchor),
-            buttons.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 16), buttons.trailingAnchor.constraint(lessThanOrEqualTo: card.trailingAnchor, constant: -16), buttons.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -14),
-            close.topAnchor.constraint(equalTo: card.topAnchor, constant: 12), close.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -12),
+            card.topAnchor.constraint(equalTo: overlay.topAnchor, constant: 24), card.bottomAnchor.constraint(equalTo: overlay.bottomAnchor, constant: -24), card.centerXAnchor.constraint(equalTo: overlay.centerXAnchor),
+            card.widthAnchor.constraint(lessThanOrEqualToConstant: 760), card.widthAnchor.constraint(lessThanOrEqualTo: overlay.widthAnchor, constant: -48), wide,
+            close.topAnchor.constraint(equalTo: clip.topAnchor, constant: 14), close.trailingAnchor.constraint(equalTo: clip.trailingAnchor, constant: -14),
+            head.topAnchor.constraint(equalTo: clip.topAnchor, constant: 20), head.leadingAnchor.constraint(equalTo: clip.leadingAnchor, constant: 20), head.trailingAnchor.constraint(lessThanOrEqualTo: close.leadingAnchor, constant: -12),
+            sChips.topAnchor.constraint(equalTo: head.bottomAnchor, constant: 14), sChips.leadingAnchor.constraint(equalTo: clip.leadingAnchor, constant: 20), sChips.trailingAnchor.constraint(equalTo: clip.trailingAnchor, constant: -20),
+            actions.topAnchor.constraint(equalTo: sChips.bottomAnchor, constant: 14), actions.leadingAnchor.constraint(equalTo: clip.leadingAnchor, constant: 20), actions.trailingAnchor.constraint(lessThanOrEqualTo: clip.trailingAnchor, constant: -20),
+            sep.topAnchor.constraint(equalTo: actions.bottomAnchor, constant: 16), sep.leadingAnchor.constraint(equalTo: clip.leadingAnchor), sep.trailingAnchor.constraint(equalTo: clip.trailingAnchor), sep.heightAnchor.constraint(equalToConstant: 1),
+            sWeb.topAnchor.constraint(equalTo: sep.bottomAnchor), sWeb.leadingAnchor.constraint(equalTo: clip.leadingAnchor), sWeb.trailingAnchor.constraint(equalTo: clip.trailingAnchor), sWeb.bottomAnchor.constraint(equalTo: clip.bottomAnchor),
+            sLoading.topAnchor.constraint(equalTo: sep.bottomAnchor, constant: 18), sLoading.leadingAnchor.constraint(equalTo: clip.leadingAnchor, constant: 20),
+            sFallback.topAnchor.constraint(equalTo: sep.bottomAnchor, constant: 18), sFallback.leadingAnchor.constraint(equalTo: clip.leadingAnchor, constant: 20), sFallback.trailingAnchor.constraint(lessThanOrEqualTo: clip.trailingAnchor, constant: -20),
+            sFallbackDesc.widthAnchor.constraint(lessThanOrEqualToConstant: 640),
         ])
-        return card
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in  // Escape closes the sheet
+            guard let s = self, e.keyCode == 53, !s.sheet.isHidden, e.window === s.window else { return e }
+            s.closeSheet(); return nil
+        }
+        return overlay
     }
 
     func buildApplyBar() -> NSView {
@@ -868,7 +937,8 @@ final class Launcher: NSObject, NSApplicationDelegate, NSCollectionViewDataSourc
         modCount.stringValue = results.count == 1 ? "1 mod" : "\(results.count) mods"; chipRow.needsLayout = true
         grid.reloadData(); gridScroll.contentView.scroll(to: .zero); gridScroll.reflectScrolledClipView(gridScroll.contentView)
         updateApplyBar()
-        if snapshotSelect, let f = results.first?["full_name"] as? String { snapshotSelect = false; selectMod(f) }
+        if snapshotSelect, let f = snapshotSheetMod() { snapshotSelect = false; openSheet(f) }
+        if snapshotPending, !results.isEmpty { snapshotPending = false; injectPending() }
     }
 
     // tiles
@@ -901,32 +971,55 @@ final class Launcher: NSObject, NSApplicationDelegate, NSCollectionViewDataSourc
         tile.name.stringValue = r["name"] as? String ?? ""
         tile.meta.stringValue = "by \(r["owner"] as? String ?? "") · \(r["version"] as? String ?? "") · \(fmtDownloads(r["downloads"] as? Int ?? 0)) downloads"
         tile.desc.stringValue = r["description"] as? String ?? ""
-        let inst = installed[full], pi = pendingInstall.contains(full), pr = pendingRemove.contains(full)
-        tile.check.state = (inst != nil && !pr) || pi ? .on : .off
-        tile.check.identifier = NSUserInterfaceItemIdentifier(full); tile.check.target = self; tile.check.action = #selector(tileChecked(_:))
-        if pi { tile.state.stringValue = "will install"; tile.state.textColor = T.accent }
-        else if pr { tile.state.stringValue = "will remove"; tile.state.textColor = T.bad }
-        else if let v = inst { tile.state.stringValue = "installed \(v)"; tile.state.textColor = T.ok }
-        else { tile.state.stringValue = "not installed"; tile.state.textColor = T.muted }
+        let inst = installed[full], queued = pendingInstall.contains(full) || pendingRemove.contains(full)
+        if queued { tile.state.stringValue = "● queued"; tile.state.textColor = T.accent }
+        else if let v = inst { tile.state.stringValue = "● installed \(v)"; tile.state.textColor = T.ok }
+        else { tile.state.stringValue = "" }
+        tile.action.identifier = NSUserInterfaceItemIdentifier(full); tile.action.target = self; tile.action.action = #selector(tileAction(_:))
+        styleAction(tile.action, full)
         tile.stripe.layer?.backgroundColor = verdict(full).0.cgColor
-        tile.selected = selectedMod == full
-        tile.onClick = { [weak self] in self?.selectMod(full) }
+        tile.selected = selectedMod == full; tile.pending = queued
+        tile.onClick = { [weak self] in self?.openSheet(full) }
         if tile.iconKey != full { tile.iconKey = full; tile.icon.image = IconCache.shared.cached(full) }
         if tile.icon.image == nil {
             IconCache.shared.image(full, url: r["icon"] as? String ?? "") { [weak tile] img in if let t = tile, t.iconKey == full { t.icon.image = img } }
         }
     }
-    @objc func tileChecked(_ b: NSButton) {
-        guard let full = b.identifier?.rawValue else { return }
-        if installed[full] != nil { if b.state == .on { pendingRemove.remove(full) } else { pendingRemove.insert(full) } }
-        else { if b.state == .on { pendingInstall.insert(full) } else { pendingInstall.remove(full) } }
+    /// Install (primary) for a mod that is not installed, Remove (secondary) for an installed one, Undo (outline) while a change is queued.
+    /// Disabled while a mods command runs, because its end clears the queue.
+    func styleAction(_ b: FlatButton, _ full: String) {
+        if pendingInstall.contains(full) || pendingRemove.contains(full) { b.title = "Undo"; b.setStyle(.outline) }
+        else if installed[full] != nil { b.title = "Remove"; b.setStyle(.secondary) }
+        else { b.title = "Install"; b.setStyle(.primary) }
+        b.isEnabled = !modsBusy; b.invalidateIntrinsicContentSize()
+    }
+    @objc func tileAction(_ b: NSButton) { if let full = b.identifier?.rawValue { togglePending(full) } }
+    /// Batch model: Install queues an install, Remove queues a remove, Undo clears the queued change. Apply runs the queue.
+    func togglePending(_ full: String) {
+        if pendingInstall.contains(full) { pendingInstall.remove(full) }
+        else if pendingRemove.contains(full) { pendingRemove.remove(full) }
+        else if installed[full] != nil { pendingRemove.insert(full) }
+        else { pendingInstall.insert(full) }
         refreshTiles()
     }
-    /// Re-render visible tiles, the side panel and the apply bar in place (no reload, so scrolling and icons stay put).
+    /// LC_SNAPSHOT_SELECT opens MoreCompany's sheet when it is listed, otherwise the first tile's.
+    func snapshotSheetMod() -> String? {
+        let names = results.compactMap { $0["full_name"] as? String }
+        return names.contains("notnotnotswipez-MoreCompany") ? "notnotnotswipez-MoreCompany" : names.first
+    }
+    /// LC_SNAPSHOT_PENDING: queue the second installed and the second not-installed mod on screen, so every tile state shows.
+    func injectPending() {
+        let names = results.prefix(9).compactMap { $0["full_name"] as? String }
+        let inst = names.filter { installed[$0] != nil }, other = names.filter { installed[$0] == nil }
+        pendingRemove = Set((inst.count > 1 ? inst[1] : inst.first).map { [$0] } ?? [])
+        pendingInstall = Set((other.count > 1 ? other[1] : other.first).map { [$0] } ?? [])
+        refreshTiles()
+    }
+    /// Re-render visible tiles, the mod sheet and the apply bar in place (no reload, so scrolling and icons stay put).
     func refreshTiles() {
         guard grid != nil else { return }
         for ip in grid.indexPathsForVisibleItems() where ip.item < results.count { if let it = grid.item(at: ip) as? ModTileItem { configure(it.tile, results[ip.item]) } }
-        updateApplyBar(); fillPanel()
+        updateApplyBar(); fillSheet()
     }
     func updateApplyBar() {
         if modsBusy {  // a mods command is running: the bar shows its status and progress instead of the pending counts
@@ -953,58 +1046,101 @@ final class Launcher: NSObject, NSApplicationDelegate, NSCollectionViewDataSourc
         run(args) { self.pendingInstall.removeAll(); self.pendingRemove.removeAll(); self.reloadInstalled { self.afterInstalledChange() } }
     }
 
-    // side panel
-    func selectMod(_ full: String?) {
-        selectedMod = full; selectedRecord = full.flatMap { f in results.first { $0["full_name"] as? String == f } ?? allResults.first { $0["full_name"] as? String == f } }
-        let open = full != nil
-        if panel.isHidden == open { panel.isHidden = !open; gridToEdge.isActive = !open; gridToPanel.isActive = open; grid.collectionViewLayout?.invalidateLayout() }
-        refreshTiles()
-        // the column count just changed: once laid out again, bring the selected tile into view
-        if let f = full, let i = results.firstIndex(where: { $0["full_name"] as? String == f }) {
-            DispatchQueue.main.async { self.grid.superview?.superview?.layoutSubtreeIfNeeded(); self.grid.scrollToItems(at: [IndexPath(item: i, section: 0)], scrollPosition: .nearestHorizontalEdge) }
-        }
-        guard let f = full else { return }
-        if infos[f] == nil {
-            kitJSON(["mods", "json-info", f]) { obj in
-                self.infos[f] = obj as? [String: Any] ?? ["error": "failed"]
-                if self.selectedMod == f { self.fillPanel() }  // ignore results for a tile that is no longer selected
+    // mod sheet
+    func record(_ full: String) -> [String: Any]? { results.first { $0["full_name"] as? String == full } ?? allResults.first { $0["full_name"] as? String == full } }
+    func openSheet(_ full: String) {
+        selectedMod = full; selectedRecord = record(full)
+        if sheet.isHidden { sheet.isHidden = false; window.makeFirstResponder(sheet) }
+        refreshTiles(); loadReadme(full)
+        if infos[full] == nil {
+            kitJSON(["mods", "json-info", full]) { obj in
+                self.infos[full] = obj as? [String: Any] ?? ["error": "failed"]
+                if self.selectedMod == full { self.fillSheet() }  // ignore results for a mod whose sheet is no longer open
             }
         }
     }
-    @objc func closePanel() { selectMod(nil) }
-    func fillPanel() {
-        guard let r = selectedRecord, let full = selectedMod, !panel.isHidden else { return }
-        if pIconKey != full {
-            pIconKey = full; pIcon.image = IconCache.shared.cached(full)
-            if pIcon.image == nil { IconCache.shared.image(full, url: r["icon"] as? String ?? "") { img in if self.pIconKey == full { self.pIcon.image = img } } }
-        }
-        pName.stringValue = r["name"] as? String ?? ""; pOwner.stringValue = "by \(r["owner"] as? String ?? "")"
-        var stats = "Version \(r["version"] as? String ?? "?")  ·  \(fmtDownloads(r["downloads"] as? Int ?? 0)) downloads  ·  rating \(r["rating"] as? Int ?? 0)"
-        let info = infos[full]
-        if let d = info?["date_updated"] as? String, d.count >= 10 { stats += "  ·  updated \(d.prefix(10))" }
-        pStats.stringValue = stats
-        pCats.views = (r["categories"] as? [String] ?? []).map { Pill($0, height: 22, target: nil, action: nil) }
-        pCats.isHidden = pCats.views.isEmpty
-        pDesc.stringValue = r["description"] as? String ?? ""
+    @objc func closeSheet() {
+        guard !sheet.isHidden else { return }
+        sheet.isHidden = true; selectedMod = nil; selectedRecord = nil; readmeShown = nil; sNav = nil; refreshTiles()
+    }
+    /// Mac verdict as a chip: coloured dot plus a short label; the audit notes are its tooltip.
+    func verdictChip(_ full: String) -> TagChip {
         let (color, headline, notes) = verdict(full)
-        pVerdict.stringValue = "● " + headline; pVerdict.textColor = color == T.line ? T.muted : color
-        pNotes.stringValue = notes.map { "• " + $0 }.joined(separator: "\n"); pNotes.isHidden = notes.isEmpty
-        if let deps = info?["dependencies"] as? [String] {
-            pDeps.stringValue = deps.isEmpty ? "None" : deps.map { d -> String in
-                let (n, v) = splitRef(d); return v.isEmpty ? n : "\(n)  \(v)" }.joined(separator: "\n")
-        } else { pDeps.stringValue = info == nil ? "Loading…" : "Unknown package" }
-        let inst = installed[full] != nil
-        pAction.title = inst ? "Remove" : "Install"; pAction.fill = inst ? T.card2 : T.accent; pAction.textColor = inst ? T.text : NSColor(srgbRed: 0.10, green: 0.05, blue: 0.02, alpha: 1)
+        let text: String
+        if installed[full] == nil { text = "Mac check after install" }
+        else { switch audit[full]?["group"] as? String { case "auto": text = "visuals auto-fixed"; case "fix": text = "needs porting"; case "ok": text = "works on Mac"; default: text = "no audit issues" } }
+        let c = TagChip(text, dot: color == T.line ? T.muted : color); c.toolTip = ([headline] + notes.map { "• " + $0 }).joined(separator: "\n"); return c
+    }
+    func fillSheet() {
+        guard let full = selectedMod, !sheet.isHidden else { return }
+        if selectedRecord == nil { selectedRecord = record(full) }
+        let r = selectedRecord ?? ["full_name": full, "name": full]
+        if sIconKey != full {
+            sIconKey = full; sIcon.image = IconCache.shared.cached(full)
+            if sIcon.image == nil { IconCache.shared.image(full, url: r["icon"] as? String ?? "") { img in if self.sIconKey == full { self.sIcon.image = img } } }
+        }
+        sName.stringValue = r["name"] as? String ?? ""
+        let info = infos[full]
+        var meta = "by \(r["owner"] as? String ?? "") · \(r["version"] as? String ?? "?") · \(fmtDownloads(r["downloads"] as? Int ?? 0)) downloads"
+        let updated = (info?["date_updated"] as? String).map { String($0.prefix(10)) } ?? (readmes[full]?["updated"] as? String ?? "")
+        if updated.count == 10 { meta += " · updated \(updated)" }
+        sMeta.stringValue = meta
+        var chips: [NSView] = [verdictChip(full)]
+        chips += (r["categories"] as? [String] ?? []).map { TagChip($0) }
+        for d in info?["dependencies"] as? [String] ?? [] {
+            let n = splitRef(d).0; chips.append(TagChip("needs " + (n.split(separator: "-", maxSplits: 1).last.map(String.init) ?? n)))
+        }
+        sChips.views = chips
+        styleAction(sAction, full)
+        let inst = installed[full]
+        if pendingInstall.contains(full) { sNote.stringValue = "Queued: installs when you apply changes"; sNote.textColor = T.accent }
+        else if pendingRemove.contains(full) { sNote.stringValue = "Queued: removed when you apply changes"; sNote.textColor = T.accent }
+        else if let v = inst { sNote.stringValue = "● installed \(v)"; sNote.textColor = T.ok }
+        else { sNote.stringValue = "" }
+        sFallbackDesc.stringValue = r["description"] as? String ?? ""
+    }
+    /// README from `mods json-readme` (the kit caches it on disk; successes are also kept in memory for this session).
+    func loadReadme(_ full: String) {
+        if readmeShown == full { return }
+        readmeShown = full; sNav = nil; sWeb.isHidden = true; sFallback.isHidden = true; sLoading.isHidden = false
+        if let d = readmes[full] { showReadme(full, d); return }
+        kitJSON(["mods", "json-readme", full]) { obj in
+            let d = obj as? [String: Any] ?? [:]
+            if !(d["html"] as? String ?? "").isEmpty { self.readmes[full] = d }
+            if self.readmeShown == full { self.showReadme(full, d); self.fillSheet() }
+        }
+    }
+    func showReadme(_ full: String, _ d: [String: Any]) {
+        let html = d["html"] as? String ?? ""
+        if html.isEmpty { readmeFailed(); return }
+        sNav = sWeb.loadHTMLString(html, baseURL: URL(string: "https://thunderstore.io/"))
+    }
+    func readmeFailed() { sNav = nil; sLoading.isHidden = true; sWeb.isHidden = true; sFallback.isHidden = false; readmeSettled() }
+    /// LC_SNAPSHOT_SELECT: the picture is taken 4 s after the README settled, so its images have time to arrive.
+    func readmeSettled() {
+        guard let path = snapshotSheetPath else { return }
+        snapshotSheetPath = nil
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { self.snapshot(to: path); NSApp.terminate(nil) }
+    }
+    func webView(_ w: WKWebView, didFinish n: WKNavigation!) {
+        guard n != nil, n === sNav else { return }
+        sLoading.isHidden = true; sWeb.isHidden = false; readmeSettled()
+    }
+    func webView(_ w: WKWebView, didFail n: WKNavigation!, withError e: Error) { if n != nil && n === sNav { readmeFailed() } }
+    func webView(_ w: WKWebView, didFailProvisionalNavigation n: WKNavigation!, withError e: Error) { if n != nil && n === sNav { readmeFailed() } }
+    /// Links in the README open in the default browser; only the README itself loads in the sheet.
+    func webView(_ w: WKWebView, decidePolicyFor a: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        if a.navigationType == .linkActivated || a.targetFrame == nil, let u = a.request.url, ["http", "https", "mailto"].contains(u.scheme ?? "") {
+            NSWorkspace.shared.open(u); decisionHandler(.cancel); return
+        }
+        decisionHandler(a.navigationType == .other ? .allow : .cancel)
     }
     /// "Author-Name-1.2.3" -> ("Author-Name", "1.2.3")
     func splitRef(_ ref: String) -> (String, String) {
         guard let i = ref.lastIndex(of: "-"), ref[ref.index(after: i)...].allSatisfy({ $0.isNumber || $0 == "." }) else { return (ref, "") }
         return (String(ref[..<i]), String(ref[ref.index(after: i)...]))
     }
-    @objc func panelAction() {
-        guard let f = selectedMod else { return }
-        run(["mods", installed[f] != nil ? "remove" : "install", profile, f]) { self.pendingInstall.remove(f); self.pendingRemove.remove(f); self.reloadInstalled { self.afterInstalledChange() } }
-    }
+    @objc func sheetAction() { if let f = selectedMod { togglePending(f) } }
     @objc func openThunderstore() {
         guard let r = selectedRecord, let o = r["owner"] as? String, let n = r["name"] as? String, let u = URL(string: "https://thunderstore.io/c/lethal-company/p/\(o)/\(n)/") else { return }
         NSWorkspace.shared.open(u)

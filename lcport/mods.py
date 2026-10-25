@@ -13,9 +13,10 @@
   mods json-search [--installed <profile>] <text>   JSON search results for the launcher
   mods json-info <Author-Name>       JSON details (dependencies, website, versions) for one package
   mods json-installed <profile>      JSON installed mods + saved audit
+  mods json-readme <Author-Name>     JSON README + changelog of the latest version as a dark HTML page (cached)
 """
-import os, sys, json, time, io, zipfile, shutil, base64, urllib.request, re, tempfile
-from . import config, dotnetmeta, thirdparty
+import os, sys, json, time, io, zipfile, shutil, base64, urllib.request, urllib.error, re, tempfile
+from . import config, dotnetmeta, thirdparty, mdhtml
 from .util import status as say_status, progress as say_progress, done as say_done  # launcher control lines
 
 INDEX_URL = "https://thunderstore.io/c/lethal-company/api/v1/package/"
@@ -290,6 +291,39 @@ def json_info(full_name):
             return {"full_name": full_name, "dependencies": p["dependencies"], "website": p["website"], "date_updated": p["date_updated"], "versions": p["versions"][:10]}
     return {"error": "unknown"}
 
+README_API = "https://thunderstore.io/api/experimental/package/{owner}/{name}/{version}/{kind}/"
+
+def package_markdown(owner, name, version, kind):
+    """README or changelog markdown of one package version from Thunderstore; a 404 (no such file) is an empty string."""
+    try: return json.loads(http(README_API.format(owner=owner, name=name, version=version, kind=kind))).get("markdown") or ""
+    except urllib.error.HTTPError as e:
+        if e.code == 404: return ""
+        raise
+
+def cached_markdown(owner, name, full_name, version, kind):
+    """Markdown from config.CACHE/readme/<full_name>-<version>.<kind>.md, fetched once (an empty file records a 404)."""
+    d = os.path.join(config.CACHE, "readme"); p = os.path.join(d, f"{name_safe(full_name)}-{name_safe(version)}.{kind}.md")
+    if os.path.exists(p):
+        with open(p, encoding="utf-8") as f: return f.read()
+    md = package_markdown(owner, name, version, kind)
+    os.makedirs(d, exist_ok=True); tmp = f"{p}.{os.getpid()}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f: f.write(md)
+    os.replace(tmp, p); return md
+
+def json_readme(full_name):
+    """The latest version's README (+ changelog) as a dark HTML document for the launcher's mod sheet.
+    html is empty when the package has neither, or when Thunderstore could not be reached ("error" says why)."""
+    pk = next((p for p in catalog() if p["full_name"] == full_name), None)
+    if pk is None: return {"full_name": full_name, "error": "unknown", "html": "", "changelog_html": ""}
+    out = {"full_name": full_name, "version": pk["version"], "html": "", "changelog_html": "", "website": pk.get("website", ""), "updated": (pk.get("date_updated") or "")[:10]}
+    try: readme = cached_markdown(pk["owner"], pk["name"], full_name, pk["version"], "readme")
+    except Exception as e: out["error"] = f"README unavailable: {e}"[:200]; return out
+    try: changelog = cached_markdown(pk["owner"], pk["name"], full_name, pk["version"], "changelog")
+    except Exception: changelog = ""  # not cached, so the next open tries again
+    out["changelog_html"] = mdhtml.to_html(changelog)
+    if readme.strip() or changelog.strip(): out["html"] = mdhtml.document(mdhtml.to_html(readme), out["changelog_html"])
+    return out
+
 def parse_apply(a):
     """apply <profile> --install A B --remove C D  ->  (profile, [A, B], [C, D]); either list may be empty or missing."""
     if not a or a[0].startswith("--"): raise SystemExit("usage: mods apply <profile> --install <names...> --remove <names...>")
@@ -326,6 +360,7 @@ def main(a):
         if rest[:1] == ["--installed"]: only, rest = set(load_manifest(rest[1])), rest[2:]
         print(json.dumps(json_search(" ".join(rest), only=only))); return
     if cmd == "json-info": print(json.dumps(json_info(a[1]))); return
+    if cmd == "json-readme": print(json.dumps(json_readme(a[1]))); return
     if cmd == "json-installed":
         prof = a[1]; ap = os.path.join(config.PROFILES, prof, "audit.json")
         aud = json.load(open(ap)) if os.path.exists(ap) else {}

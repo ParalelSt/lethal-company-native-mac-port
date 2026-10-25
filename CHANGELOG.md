@@ -12,10 +12,12 @@ Format: [Keep a Changelog](https://keepachangelog.com). Versions follow the laun
 - README section on getting the Windows copy of the game (SteamCMD on the Mac, a Windows PC, or Steam in a wrapper).
 - `mods delete-profile <name>` and a profile dropdown on Home that switches, adds and removes profiles.
 - Download percentage for mod installs: the kit streams each mod with byte progress and the Mods tab shows the status and bar in its bottom bar.
+- Mod page: clicking a mod opens a sheet with its details, Mac verdict, dependencies and the full Thunderstore README (`mods json-readme`, cached).
 
 ### Changed
 - The modded app starts through a small native launcher instead of a shell script, so Steam's overlay reaches the game and the last chosen profile is used.
 - Home tab: a Vanilla / Mods switch with one Play button, a 2x2 status grid with short hints, and smaller, lighter buttons everywhere.
+- Mod tiles use Install / Remove / Undo buttons with an installed or queued mark instead of a checkbox; the side panel is gone.
 
 ### Fixed
 - Joining Windows hosts: the native build carried regenerated NetworkObject hashes, so Netcode rejected the client without a reason. Builds now restore the original hashes after the Unity build.
