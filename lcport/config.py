@@ -2,6 +2,14 @@ import os
 APPID = 1966720
 REPO = "ParalelSt/lethal-company-native-mac-port"      # GitHub repository used for launcher self-updates and releases
 KIT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+EMBEDDED_KIT = os.path.join("Contents", "Resources", "kit")  # where downloaded launcher builds carry the kit
+
+def bundle_app(kit=None):
+    """The .app whose Contents/Resources/kit is this kit (downloaded builds), or None (a kit folder checked out from git)."""
+    kit = os.path.abspath(kit or KIT)
+    if not kit.endswith(os.sep + EMBEDDED_KIT): return None
+    app = kit[:-len(os.sep + EMBEDDED_KIT)]
+    return app if app.endswith(".app") else None
 SUPPORT = os.path.expanduser("~/Library/Application Support/LethalCompanyMac")
 WORK = os.path.join(SUPPORT, "work")          # rip output, Unity project, downloads
 CACHE = os.path.join(SUPPORT, "cache")        # downloaded archives

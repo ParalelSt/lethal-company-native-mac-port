@@ -8,12 +8,13 @@ The repository contains **no game files**. You bring the game; the launcher turn
 ## You need
 - A Mac with Apple silicon and about 25 GB free during the build.
 - Steam installed and signed in to an account that owns Lethal Company (the launcher checks).
+- Python 3 (macOS offers to install the Command Line Tools the first time; accept).
 - A free Unity account (unity.com). The launcher installs Unity Hub and the editor itself and asks you to sign in once.
 - The `Lethal Company` folder from a Windows Steam install, copied to the Mac (see Getting the Windows copy below).
 
 ## Do
-1. Download the latest launcher zip from the Releases page and unzip it (the launcher offers updates by itself afterwards).
-2. Right-click `Lethal Company Port.app` > Open, then click **Build / Update** and choose your `Lethal Company` folder.
+1. Download the .dmg (or the .zip) from the Releases page, drag Lethal Company Port into Applications, right-click it > Open the first time.
+2. Click **Build / Update** and choose your `Lethal Company` folder.
 3. Wait (about an hour the first time, mostly shader compilation). Then launch **Lethal Company** from Spotlight. Keep Steam running.
 
 Press Add to Steam once; after that Play starts the game through Steam so the Steam overlay works.

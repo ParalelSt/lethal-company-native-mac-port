@@ -11,3 +11,4 @@ Lethal Company Port.app/Contents/_CodeSignature/
 *.orig
 *.png
 snaprepo/
+dist/

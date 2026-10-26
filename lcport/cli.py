@@ -1,4 +1,4 @@
-"""Command line + simple dialog-driven menu. Commands: setup, build <game folder>, play, play-modded [profile], mods ..., check-update, check-unity (one JSON line: Unity Hub, sign-in, editor), self-update, steam-shortcut [--remove] (alias add-to-steam), version, net-fix (restore the original network prefab hashes in the installed app, needed to join Windows hosts), net-verify (check those hashes), menu"""
+"""Command line + simple dialog-driven menu. Commands: setup, build <game folder>, play, play-modded [profile], mods ..., check-update, check-unity (one JSON line: Unity Hub, sign-in, editor), self-update, kit-root, steam-shortcut [--remove] (alias add-to-steam), version, net-fix (restore the original network prefab hashes in the installed app, needed to join Windows hosts), net-verify (check those hashes), menu"""
 import os, sys, subprocess, time, shutil, glob, json
 from . import config
 
@@ -228,6 +228,7 @@ def main():
         elif cmd == "play-modded": cmd_play(a[1:], modded=True)
         elif cmd == "mods":
             from . import mods; mods.main(a[1:])
+        elif cmd == "kit-root": print(config.KIT)  # the kit folder in use (inside the app for downloaded builds)
         elif cmd == "version":
             from . import __version__; print(__version__)
         elif cmd == "self-update":

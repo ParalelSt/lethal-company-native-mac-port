@@ -3,8 +3,8 @@ import Foundation
 import WebKit
 
 // Native launcher window styled like a web app: sidebar navigation, banner header, rounded cards, a grid of mod tiles,
-// collapsible log drawer. Every action runs the Python kit ("python3 -m lcport ...") in the kit folder next to this
-// app bundle; output streams into the drawer.
+// collapsible log drawer. Every action runs the Python kit ("python3 -m lcport ...") in the kit folder (inside the bundle
+// for downloaded builds, next to it for a git checkout); output streams into the drawer.
 
 /// Paragraph style for one-line labels set through attributedStringValue (which otherwise drops the label's truncation).
 let oneLine: NSParagraphStyle = { let p = NSMutableParagraphStyle(); p.lineBreakMode = .byTruncatingTail; return p }()
@@ -311,7 +311,14 @@ final class Launcher: NSObject, NSApplicationDelegate, NSCollectionViewDataSourc
     var searchTimer: Timer?, searchSeq = 0, snapshotSelect = false, snapshotPending = false, snapshotSheetPath: String?
     var unityInfo: [String: Any]?, unityCheckedAt: Date?  // last "check-unity" answer: {"hub", "signed_in", "editor"}; asked at most every 30 s
 
-    override init() { kit = Bundle.main.bundleURL.deletingLastPathComponent(); super.init() }
+    /// The kit the app runs: Contents/Resources/kit when the bundle carries one (downloaded builds), else the folder that
+    /// holds the .app (a git checkout with the app built next to lcport/).
+    static func resolveKit() -> URL {
+        if let res = Bundle.main.resourceURL?.appendingPathComponent("kit"), FileManager.default.fileExists(atPath: res.appendingPathComponent("lcport/__init__.py").path) { return res }
+        return Bundle.main.bundleURL.deletingLastPathComponent()
+    }
+    var embedded: Bool { kit.path.hasSuffix("/Contents/Resources/kit") }
+    override init() { kit = Launcher.resolveKit(); super.init() }
 
     func applicationDidFinishLaunching(_ n: Notification) {
         buildWindow(); refreshStatus()
@@ -789,7 +796,9 @@ final class Launcher: NSObject, NSApplicationDelegate, NSCollectionViewDataSourc
     // MARK: running the kit
     func makeProcess(_ args: [String]) -> Process {
         let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/env"); p.arguments = ["python3", "-m", "lcport"] + args; p.currentDirectoryURL = kit
-        var env = ProcessInfo.processInfo.environment; env["PATH"] = "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin:" + (env["PATH"] ?? ""); env["PYTHONUNBUFFERED"] = "1"; p.environment = env; return p
+        var env = ProcessInfo.processInfo.environment; env["PATH"] = "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin:" + (env["PATH"] ?? ""); env["PYTHONUNBUFFERED"] = "1"
+        if embedded { env["PYTHONDONTWRITEBYTECODE"] = "1" }  // keep __pycache__ out of the signed bundle
+        p.environment = env; return p
     }
     func run(_ args: [String], then: (() -> Void)? = nil) {
         if process != nil { appendLog("(busy: wait for the current task to finish)\n"); return }

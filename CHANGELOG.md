@@ -5,6 +5,11 @@ Format: [Keep a Changelog](https://keepachangelog.com). Versions follow the laun
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-26
+
+### Added
+- Downloadable launcher builds: a .dmg and a zipped .app that contain the kit, so nothing has to sit next to the app. Self-update keeps working inside the bundle.
+
 ## [0.1.0] - 2026-10-25
 
 ### Added
